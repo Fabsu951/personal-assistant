@@ -27,6 +27,8 @@ async def transcribe(config, audio: bytes, filename: str = "voice.ogg") -> str:
 
 SPEECH_URL = "https://api.openai.com/v1/audio/speech"
 MODES = ("auto", "always", "off")  # auto = answer voice with voice
+VOICES = ("alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer",
+          "verse")
 
 
 def wants_voice(mode: str, spoken: bool) -> bool:
@@ -40,7 +42,7 @@ def for_speech(text: str) -> str:
     return text.strip()[:4000]  # the API takes at most 4096 characters
 
 
-async def speak(config, text: str) -> bytes:
+async def speak(config, text: str, voice: str | None = None, style: str | None = None) -> bytes:
     """Text -> an OGG/Opus voice message that Telegram plays inline."""
     if not config.openai_api_key:
         raise RuntimeError("voice replies need the OPENAI_API_KEY setting (see README).")
@@ -48,10 +50,10 @@ async def speak(config, text: str) -> bytes:
         r = await client.post(
             SPEECH_URL,
             headers={"Authorization": f"Bearer {config.openai_api_key}"},
-            json={"model": config.tts_model, "voice": config.tts_voice,
+            json={"model": config.tts_model, "voice": voice or config.tts_voice,
                   "input": for_speech(text), "response_format": "opus",
-                  "instructions": "Speak naturally and warmly, at a relaxed pace, "
-                                  "in the language of the text."},
+                  "instructions": (style or config.tts_style)
+                  + " Speak in the language of the text."},
         )
     if r.status_code != 200:
         raise RuntimeError(f"speech service said {r.status_code}: {r.text[:200]}")

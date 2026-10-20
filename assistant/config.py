@@ -51,6 +51,10 @@ class Config:
     voice_replies: str = field(default_factory=lambda: _env("VOICE_REPLIES", "auto"))
     tts_model: str = field(default_factory=lambda: _env("TTS_MODEL", "gpt-4o-mini-tts"))
     tts_voice: str = field(default_factory=lambda: _env("TTS_VOICE", "onyx"))
+    # How the voice should sound (Ragnar can change this himself when asked).
+    tts_style: str = field(default_factory=lambda: _env(
+        "TTS_STYLE", "Warm, cheerful and upbeat, like a friendly personal coach who is smiling. "
+                     "Natural energy and a lively but relaxed pace."))
     data_dir: Path = field(default_factory=lambda: Path(
         _env("DATA_DIR", "/data" if Path("/data").is_dir() else "./data")))
     history_turns: int = field(default_factory=lambda: int(_env("HISTORY_TURNS", "20")))

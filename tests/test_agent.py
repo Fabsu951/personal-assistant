@@ -311,3 +311,33 @@ def test_voice_speaks(monkeypatch):
     cfg.openai_api_key = "sk-test"
     assert asyncio.run(voice.speak(cfg, "Hej *Fabian*")) == b"OggS-audio"
     assert seen["input"] == "Hej Fabian" and seen["response_format"] == "opus"
+
+
+def test_voice_settings_tool(tmp_path, monkeypatch):
+    import json
+    import httpx
+    from assistant import voice
+    from assistant.skills.base import ToolContext
+    agent, db, _ = make(tmp_path, [])
+    ctx = ToolContext(db=db, config=agent.config, chat_id=1)
+    out = agent.tools["voice_settings"].handler({"voice": "nova", "style": "Very happy"}, ctx)
+    assert out["voice"] == "nova" and out["style"] == "Very happy" and out["replies"] == "auto"
+    seen = {}
+
+    def handler(request):
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, content=b"ogg")
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(voice.httpx, "AsyncClient",
+                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    agent.config.openai_api_key = "sk-test"
+    asyncio.run(voice.speak(agent.config, "Hej", voice=db.get("tts_voice"), style=db.get("tts_style")))
+    assert seen["voice"] == "nova" and seen["instructions"].startswith("Very happy")
+
+
+def test_voice_skill_always_loaded(tmp_path):
+    cfg = Config()
+    db = DB(tmp_path / "t.db")
+    names = [s.name for s in load_skills(["tasks"], db, cfg)]
+    assert names == ["Tasks & reminders", "Voice"]

@@ -71,7 +71,7 @@ Claude can't listen to audio, so voice messages are turned into text by OpenAI's
 
 The bot shows what it heard (🎤 "...") and then answers as if you had typed it, both as a voice
 message and as text. Change this with `/voice auto` (default: voice in → voice out), `/voice always`
-or `/voice off`. Pick another voice with `TTS_VOICE` (e.g. `nova`, `ash`, `coral`; default `onyx`).
+or `/voice off`. To change how it sounds, just ask: *"make your voice happier"* or *"use a female voice"*.
 
 ### Optional: Strava (10 min, free)
 Lets the training coach see runs, rides and other workouts from your watch. Garmin, Apple Watch (via an app like HealthFit), Polar, Coros and others can sync to Strava automatically.

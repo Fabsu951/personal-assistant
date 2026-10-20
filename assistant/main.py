@@ -111,7 +111,9 @@ class Bot:
         if voice.wants_voice(self.voice_mode(), spoken) and self.config.openai_api_key:
             try:
                 await bot.send_chat_action(chat_id, ChatAction.RECORD_VOICE)
-                await bot.send_voice(chat_id, await voice.speak(self.config, reply.text))
+                audio = await voice.speak(self.config, reply.text,
+                                          voice=self.db.get("tts_voice"), style=self.db.get("tts_style"))
+                await bot.send_voice(chat_id, audio)
             except Exception:  # the text reply below still arrives
                 log.exception("Text-to-speech failed")
         await self.send_reply(chat_id, reply, bot)

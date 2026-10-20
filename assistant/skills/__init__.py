@@ -11,6 +11,7 @@ from .fitness import FitnessSkill
 from .google_workspace import GoogleSkill
 from .research import ResearchSkill
 from .tasks import TasksSkill
+from .voice_settings import VoiceSkill
 
 AVAILABLE = {
     "google": GoogleSkill,
@@ -18,12 +19,14 @@ AVAILABLE = {
     "research": ResearchSkill,
     "admin": AdminSkill,
     "fitness": FitnessSkill,
+    "voice": VoiceSkill,
 }
+CORE = ["voice"]  # always on, whatever ENABLED_SKILLS says
 
 
 def load_skills(names: list[str], db, config) -> list[Skill]:
     skills = []
-    for name in names:
+    for name in dict.fromkeys(names + CORE):  # no duplicates, order kept
         cls = AVAILABLE.get(name)
         if cls is None:
             raise ValueError(f"Unknown skill '{name}'. Available: {', '.join(AVAILABLE)}")
