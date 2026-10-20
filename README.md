@@ -8,7 +8,7 @@ Your own AI personal assistant that you chat with on Telegram. It can:
 - **Life admin**: log expenses, give monthly spending summaries, and track recurring bills
 - **Training coach**: keeps your training program, logs workouts and how your body feels (sleep, energy, injuries), adapts sessions to that, and sends a weekly review every Sunday
 - **Strava**: workouts from Garmin, Apple Watch, Polar etc. come in automatically (optional)
-- **Voice messages**: talk instead of typing (needs an OpenAI key, see below)
+- **Voice messages**: talk instead of typing, and get spoken answers back (needs an OpenAI key, see below)
 - **Daily briefing**: every morning (default 07:30), a summary of your day
 
 **Safety:** it never sends an email or changes your calendar without asking. You get **✅ Approve / ❌ Reject** buttons first. Only *you* can talk to it.
@@ -64,12 +64,14 @@ You'll collect 4 keys, then paste them into the hosting site. Keep them private,
 3. Send `/connect_google` to the bot and follow its three instructions.
 4. Try it: *"What's on my calendar this week?"* or `/briefing`.
 
-### Optional: voice messages (5 min, about $0.003 per minute of audio)
+### Optional: voice messages (5 min, about $0.003 per minute heard, $0.015 per minute spoken)
 Claude can't listen to audio, so voice messages are turned into text by OpenAI's speech-to-text first.
 1. Go to **platform.openai.com**, add a little credit under **Billing**, then **API keys → Create new secret key**.
 2. In Railway → Variables, add `OPENAI_API_KEY=<that key>`.
 
-The bot shows what it heard (🎤 "...") and then answers as if you had typed it.
+The bot shows what it heard (🎤 "...") and then answers as if you had typed it, both as a voice
+message and as text. Change this with `/voice auto` (default: voice in → voice out), `/voice always`
+or `/voice off`. Pick another voice with `TTS_VOICE` (e.g. `nova`, `ash`, `coral`; default `onyx`).
 
 ### Optional: Strava (10 min, free)
 Lets the training coach see runs, rides and other workouts from your watch. Garmin, Apple Watch (via an app like HealthFit), Polar, Coros and others can sync to Strava automatically.
@@ -89,6 +91,7 @@ Just chat normally. Useful commands:
 | `/tasks` | Open to-dos |
 | `/connect_google` | (Re)connect Gmail/Calendar/Drive |
 | `/connect_strava` | Connect Strava |
+| `/voice` | Spoken replies: `auto`, `always` or `off` |
 | `/review` | Weekly training review right now (it also comes automatically on Sundays, 19:00) |
 | `/skills` | What it can do |
 | `/reset` | Clear chat memory (tasks, notes and expenses are kept) |

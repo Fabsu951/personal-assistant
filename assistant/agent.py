@@ -44,6 +44,8 @@ class Agent:
         stable = f"""You are {self.config.assistant_name}, the personal assistant of {self.config.owner_name}.
 You chat with them on Telegram, so keep answers short, friendly and easy to read on a phone.
 Avoid markdown tables and headings; simple lists are fine.
+Your replies can also be read aloud as Telegram voice messages (the user switches this
+with /voice auto|always|off; by default voice messages get a spoken reply).
 
 Always interpret times in the user's timezone ({self.config.timezone}) unless told otherwise.
 The current date and time is given at the end of these instructions.

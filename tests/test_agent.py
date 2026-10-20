@@ -285,3 +285,29 @@ def test_strava_not_connected(tmp_path):
     ])
     asyncio.run(agent.handle(1, "runs?"))
     assert "connect_strava" in client.calls[1]["messages"][-1]["content"][0]["content"]
+
+
+def test_voice_modes():
+    from assistant.voice import for_speech, wants_voice
+    assert wants_voice("auto", spoken=True) and not wants_voice("auto", spoken=False)
+    assert wants_voice("always", spoken=False) and not wants_voice("off", spoken=True)
+    assert for_speech("**Klart!** Se https://x.se/a?b=1 nu") == "Klart! Se  nu"
+
+
+def test_voice_speaks(monkeypatch):
+    import json
+    import httpx
+    from assistant import voice
+    seen = {}
+
+    def handler(request):
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, content=b"OggS-audio")
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(voice.httpx, "AsyncClient",
+                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    cfg = Config()
+    cfg.openai_api_key = "sk-test"
+    assert asyncio.run(voice.speak(cfg, "Hej *Fabian*")) == b"OggS-audio"
+    assert seen["input"] == "Hej Fabian" and seen["response_format"] == "opus"

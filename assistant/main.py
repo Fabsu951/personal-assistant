@@ -46,7 +46,7 @@ HELP = """Hi! I'm your personal assistant. Just talk to me normally, e.g.:
 • "I spent 250 on lunch"
 • "Did legs today: squats 3x5 at 100 kg"
 • "Slept 6 hours, left knee aches" (I'll adapt your training)
-You can also send voice messages.
+You can also send voice messages, and I answer them with voice.
 
 Commands:
 /connect_google – link Gmail, Calendar & Drive
@@ -55,6 +55,7 @@ Commands:
 /connect_strava – link Strava (workouts from your watch)
 /tasks – show open tasks
 /skills – what I can do
+/voice – spoken replies on/off
 /reset – clear our conversation memory (notes and tasks are kept)"""
 
 
@@ -96,7 +97,10 @@ class Bot:
             await bot.send_message(chat_id, f"Needs your approval (#{pid}):\n\n{row['summary']}"[:4000],
                                    reply_markup=kb)
 
-    async def ask_agent(self, chat_id: int, text: str, bot, remember=True) -> None:
+    def voice_mode(self) -> str:
+        return self.db.get("voice_replies", self.config.voice_replies)
+
+    async def ask_agent(self, chat_id: int, text: str, bot, remember=True, spoken=False) -> None:
         await bot.send_chat_action(chat_id, ChatAction.TYPING)
         try:
             reply = await self.agent.handle(chat_id, text, remember=remember)
@@ -104,6 +108,12 @@ class Bot:
             log.exception("Agent error")
             await bot.send_message(chat_id, f"Something went wrong: {e}")
             return
+        if voice.wants_voice(self.voice_mode(), spoken) and self.config.openai_api_key:
+            try:
+                await bot.send_chat_action(chat_id, ChatAction.RECORD_VOICE)
+                await bot.send_voice(chat_id, await voice.speak(self.config, reply.text))
+            except Exception:  # the text reply below still arrives
+                log.exception("Text-to-speech failed")
         await self.send_reply(chat_id, reply, bot)
 
     # ----------------------------------------------------------- handlers
@@ -203,7 +213,18 @@ class Bot:
             await update.message.reply_text("I couldn't hear any words in that voice message.")
             return
         await update.message.reply_text(f"🎤 \"{text[:500]}\"")  # so mishearings are visible
-        await self.ask_agent(chat_id, text, ctx.bot)
+        await self.ask_agent(chat_id, text, ctx.bot, spoken=True)
+
+    async def on_voice_setting(self, update: Update, ctx):
+        if not await self.guard(update):
+            return
+        if ctx.args and ctx.args[0].lower() in voice.MODES:
+            self.db.set("voice_replies", ctx.args[0].lower())
+        await update.message.reply_text(
+            f"Spoken replies: {self.voice_mode()}\n\n"
+            "/voice auto – I answer voice messages with voice\n"
+            "/voice always – I always answer with voice too\n"
+            "/voice off – text only")
 
     async def on_button(self, update: Update, ctx):
         q = update.callback_query
@@ -240,6 +261,7 @@ class Bot:
         app.add_handler(CommandHandler("connect_google", self.on_connect_google))
         app.add_handler(CommandHandler("connect_strava", self.on_connect_strava))
         app.add_handler(CommandHandler("review", self.on_review))
+        app.add_handler(CommandHandler("voice", self.on_voice_setting))
         app.add_handler(CallbackQueryHandler(self.on_button))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_text))
         app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, self.on_voice))
