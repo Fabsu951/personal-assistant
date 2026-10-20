@@ -6,6 +6,8 @@ Your own AI personal assistant that you chat with on Telegram. It can:
 - **Tasks & reminders**: keep a to-do list and send you reminders on Telegram at the right time
 - **Research & notes**: search the web and remember things for you
 - **Life admin**: log expenses, give monthly spending summaries, and track recurring bills
+- **Training coach**: keeps your training program, logs workouts and tracks your progress
+- **Voice messages**: talk instead of typing (needs an OpenAI key, see below)
 - **Daily briefing**: every morning (default 07:30), a summary of your day
 
 **Safety:** it never sends an email or changes your calendar without asking. You get **✅ Approve / ❌ Reject** buttons first. Only *you* can talk to it.
@@ -61,6 +63,13 @@ You'll collect 4 keys, then paste them into the hosting site. Keep them private,
 3. Send `/connect_google` to the bot and follow its three instructions.
 4. Try it: *"What's on my calendar this week?"* or `/briefing`.
 
+### Optional: voice messages (5 min, about $0.003 per minute of audio)
+Claude can't listen to audio, so voice messages are turned into text by OpenAI's speech-to-text first.
+1. Go to **platform.openai.com**, add a little credit under **Billing**, then **API keys → Create new secret key**.
+2. In Railway → Variables, add `OPENAI_API_KEY=<that key>`.
+
+The bot shows what it heard (🎤 "...") and then answers as if you had typed it.
+
 ---
 
 ## Using it
@@ -86,7 +95,8 @@ The assistant is built from **skills** (specialists) in `assistant/skills/`. Eac
 
 1. Open this repo in **Claude → Code** and say: *"Add a new skill that …"*.
 2. Claude creates `assistant/skills/<name>.py` (based on `_template.py`) and registers it in `skills/__init__.py`.
-3. Add its key to `ENABLED_SKILLS` in Railway, e.g. `google,tasks,research,admin,fitness`.
+3. Add its key to `ENABLED_SKILLS` in Railway, e.g. `google,tasks,research,admin,fitness`
+   (if you never set `ENABLED_SKILLS`, the defaults in `config.py` are used).
 
 Railway redeploys automatically whenever the GitHub repo changes.
 

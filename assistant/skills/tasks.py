@@ -82,7 +82,7 @@ class TasksSkill(Skill):
             instructions=(
                 "Use tasks for things to do, reminders for 'remind me at/in ...'. "
                 "Convert relative times ('in 2 hours', 'tomorrow 9') to ISO datetimes "
-                "using the current time above."
+                "using the current date and time."
             ),
             tools=[
                 Tool("task_add", "Add a to-do item.",

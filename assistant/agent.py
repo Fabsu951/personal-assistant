@@ -31,17 +31,22 @@ class Agent:
         self.server_tools = [st for s in skills for st in s.server_tools()]
 
     # ------------------------------------------------------------------
-    def system_prompt(self) -> str:
+    def system_prompt(self) -> list[dict]:
+        """Stable instructions (cached together with the tools) + the current time.
+
+        The time changes every minute, so it sits after the cache breakpoint:
+        anything before the breakpoint must stay byte-identical between requests.
+        """
         now = datetime.now(ZoneInfo(self.config.timezone))
         skill_text = "\n\n".join(
             f"## {s.name}\n{s.instructions}".strip() for s in self.skills if s.instructions
         )
-        return f"""You are {self.config.assistant_name}, the personal assistant of {self.config.owner_name}.
+        stable = f"""You are {self.config.assistant_name}, the personal assistant of {self.config.owner_name}.
 You chat with them on Telegram, so keep answers short, friendly and easy to read on a phone.
 Avoid markdown tables and headings; simple lists are fine.
 
-Current date and time: {now:%A %d %B %Y, %H:%M} ({self.config.timezone}).
-Always interpret times in this timezone unless told otherwise.
+Always interpret times in the user's timezone ({self.config.timezone}) unless told otherwise.
+The current date and time is given at the end of these instructions.
 
 Rules:
 - Use your tools to get real information. Never invent emails, events or facts.
@@ -54,6 +59,11 @@ Rules:
 {skill_text}
 
 {self.config.extra_instructions}""".strip()
+        return [
+            {"type": "text", "text": stable, "cache_control": {"type": "ephemeral"}},
+            {"type": "text",
+             "text": f"Current date and time: {now:%A %d %B %Y, %H:%M} ({self.config.timezone})."},
+        ]
 
     def _all_tools(self) -> list[dict]:
         return [t.to_api() for t in self.tools.values()] + self.server_tools
@@ -96,10 +106,17 @@ Rules:
             resp = await self.client.messages.create(
                 model=self.config.model,
                 max_tokens=4096,
+                # Caches the growing conversation, so each step of the tool loop
+                # re-reads the earlier steps at ~10% of the normal input price.
+                cache_control={"type": "ephemeral"},
                 system=system,
                 tools=self._all_tools(),
                 messages=messages,
             )
+            if usage := getattr(resp, "usage", None):  # check cache hits in the Railway logs
+                log.info("tokens: input=%s cache_read=%s cache_write=%s output=%s",
+                         usage.input_tokens, usage.cache_read_input_tokens,
+                         usage.cache_creation_input_tokens, usage.output_tokens)
             text = "".join(b.text for b in resp.content if b.type == "text").strip()
             if text:
                 final_text = text

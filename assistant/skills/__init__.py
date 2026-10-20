@@ -7,6 +7,7 @@ HOW TO ADD A NEW AGENT / SPECIALIST
 """
 from .admin import AdminSkill
 from .base import Skill
+from .fitness import FitnessSkill
 from .google_workspace import GoogleSkill
 from .research import ResearchSkill
 from .tasks import TasksSkill
@@ -16,6 +17,7 @@ AVAILABLE = {
     "tasks": TasksSkill,
     "research": ResearchSkill,
     "admin": AdminSkill,
+    "fitness": FitnessSkill,
 }
 
 

@@ -34,7 +34,7 @@ def make(tmp_path, script):
     cfg = Config()
     cfg.data_dir = tmp_path
     db = DB(tmp_path / "t.db")
-    skills = load_skills(["google", "tasks", "research", "admin"], db, cfg)
+    skills = load_skills(["google", "tasks", "research", "admin", "fitness"], db, cfg)
     client = FakeClient(script)
     return Agent(cfg, db, skills, client=client), db, client
 
@@ -114,3 +114,113 @@ def test_expenses(tmp_path):
     agent.tools["expense_add"].handler({"amount": 250, "category": "food"}, ctx)
     s = agent.tools["expense_summary"].handler({}, ctx)
     assert s["totals_by_category"][0]["total"] == 250
+
+
+def test_prompt_caching(tmp_path):
+    agent, db, client = make(tmp_path, [([text("Hi")], "end_turn")])
+    asyncio.run(agent.handle(1, "hello"))
+    call = client.calls[0]
+    assert call["cache_control"] == {"type": "ephemeral"}
+    stable, now = call["system"]
+    assert stable["cache_control"] == {"type": "ephemeral"}
+    # the time changes every minute, so it must not be inside the cached block
+    assert "Current date and time" not in stable["text"] and "Current date and time" in now["text"]
+    assert "cache_control" not in now
+
+
+def test_system_prompt_identical_within_turn(tmp_path):
+    agent, db, client = make(tmp_path, [
+        ([tool_use("t1", "task_list", {})], "tool_use"),
+        ([text("Nothing to do.")], "end_turn"),
+    ])
+    asyncio.run(agent.handle(1, "tasks?"))
+    assert client.calls[0]["system"] == client.calls[1]["system"]
+
+
+class FakeCalendar:
+    """Just enough of the Google Calendar client for calendar_list_events."""
+    def __init__(self, calendars, events):
+        self.calendars, self.events_by_cal, self.inserted = calendars, events, None
+
+    def calendarList(self):
+        return NS(list=lambda pageToken=None: NS(execute=lambda: {"items": self.calendars}))
+
+    def events(self):
+        def list_(calendarId, **kw):
+            if calendarId not in self.events_by_cal:
+                raise RuntimeError("forbidden")
+            return NS(execute=lambda: {"items": self.events_by_cal[calendarId]})
+
+        def insert(calendarId, body, sendUpdates):
+            self.inserted = calendarId
+            return NS(execute=lambda: {"htmlLink": "link"})
+        return NS(list=list_, insert=insert)
+
+
+def test_calendar_reads_all_calendars(tmp_path, monkeypatch):
+    from assistant.skills import google_workspace as gw
+    from assistant.skills.base import ToolContext
+    agent, db, _ = make(tmp_path, [])
+    cal = FakeCalendar(
+        [{"id": "me@x.com", "summary": "me@x.com", "primary": True},
+         {"id": "fam123", "summary": "Familj"},
+         {"id": "broken", "summary": "Broken"}],
+        {"me@x.com": [{"id": "a", "summary": "Gym",
+                       "start": {"dateTime": "2026-10-21T18:00:00+08:00"},
+                       "end": {"dateTime": "2026-10-21T19:00:00+08:00"}}],
+         "fam123": [{"id": "b", "summary": "Dinner with mom",
+                     "start": {"dateTime": "2026-10-21T10:00:00Z"},
+                     "end": {"dateTime": "2026-10-21T11:00:00Z"}},
+                    {"id": "c", "summary": "Birthday", "start": {"date": "2026-10-21"},
+                     "end": {"date": "2026-10-22"}}]})
+    monkeypatch.setattr(gw, "_svc", lambda ctx, name, version: cal)
+    ctx = ToolContext(db=db, config=agent.config, chat_id=1)
+    out = gw.calendar_list_events({"start": "2026-10-21", "end": "2026-10-22"}, ctx)
+    assert [e.get("title") for e in out[:3]] == ["Birthday", "Gym", "Dinner with mom"]
+    assert out[2]["calendar"] == "Familj" and out[2]["calendar_id"] == "fam123"
+    assert "Broken" in out[3]["note"]
+    gw.calendar_create_event({"title": "Picnic", "start": "2026-10-25T12:00", "calendar": "familj"}, ctx)
+    assert cal.inserted == "fam123"
+
+
+def test_fitness(tmp_path):
+    from assistant.skills.base import ToolContext
+    agent, db, _ = make(tmp_path, [])
+    ctx = ToolContext(db=db, config=agent.config, chat_id=1)
+    t = agent.tools
+    t["program_set"].handler({"program": "Mon: legs. Thu: upper body."}, ctx)
+    assert "legs" in t["program_get"].handler({}, ctx)["program"]
+    t["workout_log"].handler({"kind": "legs", "date": "2000-01-01", "exercises": [
+        {"exercise": "Squat", "sets": 3, "reps": 5, "weight_kg": 100}]}, ctx)
+    t["workout_log"].handler({"kind": "legs", "exercises": [
+        {"exercise": "squat", "sets": 3, "reps": 5, "weight_kg": 102.5}]}, ctx)
+    assert [r["weight_kg"] for r in t["exercise_progress"].handler({"exercise": "squat"}, ctx)] == [100, 102.5]
+    recent = t["workout_history"].handler({"days": 7}, ctx)
+    assert len(recent) == 1 and recent[0]["exercises"][0]["weight_kg"] == 102.5
+
+
+def test_voice_needs_key():
+    import pytest
+    from assistant import voice
+    cfg = Config()
+    cfg.openai_api_key = ""
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+        asyncio.run(voice.transcribe(cfg, b"audio"))
+
+
+def test_voice_transcribes(monkeypatch):
+    import httpx
+    from assistant import voice
+    seen = {}
+
+    def handler(request):
+        seen["auth"] = request.headers["authorization"]
+        return httpx.Response(200, json={"text": " hej Ragnar "})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(voice.httpx, "AsyncClient",
+                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    cfg = Config()
+    cfg.openai_api_key = "sk-test"
+    assert asyncio.run(voice.transcribe(cfg, b"audio")) == "hej Ragnar"
+    assert seen["auth"] == "Bearer sk-test"

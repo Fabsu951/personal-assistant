@@ -25,12 +25,16 @@ class Config:
     owner_name: str = field(default_factory=lambda: os.getenv("OWNER_NAME", "Fabian"))
     # Comma-separated list of skills to switch on.
     enabled_skills: list[str] = field(
-        default_factory=lambda: _list(os.getenv("ENABLED_SKILLS", "google,tasks,research,admin"))
+        default_factory=lambda: _list(os.getenv("ENABLED_SKILLS", "google,tasks,research,admin,fitness"))
     )
     # Daily briefing time, HH:MM in your timezone. Empty = off.
     briefing_time: str = field(default_factory=lambda: os.getenv("BRIEFING_TIME", "07:30"))
     google_client_id: str = field(default_factory=lambda: os.getenv("GOOGLE_CLIENT_ID", ""))
     google_client_secret: str = field(default_factory=lambda: os.getenv("GOOGLE_CLIENT_SECRET", ""))
+    # Voice messages are transcribed with OpenAI's speech-to-text API. Empty = voice off.
+    openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
+    transcribe_model: str = field(
+        default_factory=lambda: os.getenv("TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe"))
     data_dir: Path = field(default_factory=lambda: Path(os.getenv("DATA_DIR", "./data")))
     history_turns: int = field(default_factory=lambda: int(os.getenv("HISTORY_TURNS", "20")))
     extra_instructions: str = field(default_factory=lambda: os.getenv("EXTRA_INSTRUCTIONS", ""))

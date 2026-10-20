@@ -8,7 +8,7 @@ from telegram.constants import ChatAction
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
                           MessageHandler, filters)
 
-from . import google_auth
+from . import google_auth, voice
 from .agent import Agent
 from .config import Config
 from .db import DB
@@ -22,9 +22,9 @@ log = logging.getLogger("assistant")
 BRIEFING_PROMPT = (
     "Give me my morning briefing. Check: today's calendar events, important unread emails "
     "from the last 24 hours (skip newsletters/promotions), open tasks that are due soon or "
-    "overdue, and recurring bills due in the next 5 days. Keep it short and scannable, "
-    "then suggest the 1-3 most important things to do today. Skip any part whose account "
-    "isn't connected."
+    "overdue, recurring bills due in the next 5 days, and today's planned workout (if a "
+    "training program is set). Keep it short and scannable, then suggest the 1-3 most "
+    "important things to do today. Skip any part whose account isn't connected."
 )
 
 HELP = """Hi! I'm your personal assistant. Just talk to me normally, e.g.:
@@ -35,6 +35,8 @@ HELP = """Hi! I'm your personal assistant. Just talk to me normally, e.g.:
 • "Add 'renew passport' to my to-do list"
 • "Research the best eSIM for Japan"
 • "I spent 250 on lunch"
+• "Did legs today: squats 3x5 at 100 kg"
+You can also send voice messages.
 
 Commands:
 /connect_google – link Gmail, Calendar & Drive
@@ -145,6 +147,27 @@ class Bot:
             return
         await self.ask_agent(chat_id, text, ctx.bot)
 
+    async def on_voice(self, update: Update, ctx):
+        if not await self.guard(update):
+            return
+        chat_id = update.effective_chat.id
+        media = update.message.voice or update.message.audio
+        await ctx.bot.send_chat_action(chat_id, ChatAction.TYPING)
+        try:
+            file = await media.get_file()
+            audio = bytes(await file.download_as_bytearray())
+            text = await voice.transcribe(self.config, audio,
+                                          getattr(media, "file_name", None) or "voice.ogg")
+        except Exception as e:
+            log.exception("Transcription failed")
+            await update.message.reply_text(f"I couldn't listen to that voice message: {e}")
+            return
+        if not text:
+            await update.message.reply_text("I couldn't hear any words in that voice message.")
+            return
+        await update.message.reply_text(f"🎤 \"{text[:500]}\"")  # so mishearings are visible
+        await self.ask_agent(chat_id, text, ctx.bot)
+
     async def on_button(self, update: Update, ctx):
         q = update.callback_query
         if not self.allowed(update):
@@ -176,6 +199,7 @@ class Bot:
         app.add_handler(CommandHandler("connect_google", self.on_connect_google))
         app.add_handler(CallbackQueryHandler(self.on_button))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_text))
+        app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, self.on_voice))
 
         app.job_queue.run_repeating(self.job_reminders, interval=30, first=10)
         if self.config.briefing_time:
