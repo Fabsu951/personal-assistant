@@ -91,11 +91,12 @@ Rules:
 
         pending: list[int] = []
         final_text = ""
+        system = self.system_prompt()  # build once: must stay identical within a turn
         for _ in range(MAX_STEPS):
             resp = await self.client.messages.create(
                 model=self.config.model,
                 max_tokens=4096,
-                system=self.system_prompt(),
+                system=system,
                 tools=self._all_tools(),
                 messages=messages,
             )
