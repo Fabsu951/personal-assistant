@@ -31,7 +31,7 @@ class Agent:
         self.server_tools = [st for s in skills for st in s.server_tools()]
 
     # ------------------------------------------------------------------
-    def system_prompt(self) -> list[dict]:
+    def system_prompt(self, spoken: bool = False) -> list[dict]:
         """Stable instructions (cached together with the tools) + the current time.
 
         The time changes every minute, so it sits after the cache breakpoint:
@@ -61,10 +61,14 @@ Rules:
 {skill_text}
 
 {self.config.extra_instructions}""".strip()
+        volatile = f"Current date and time: {now:%A %d %B %Y, %H:%M} ({self.config.timezone})."
+        if spoken:
+            volatile += ("\nThe user sent a voice message and your reply will be read aloud. "
+                         "Answer in 1-3 short, natural sentences. No lists, links or emojis. "
+                         "Offer more detail only if they ask.")
         return [
             {"type": "text", "text": stable, "cache_control": {"type": "ephemeral"}},
-            {"type": "text",
-             "text": f"Current date and time: {now:%A %d %B %Y, %H:%M} ({self.config.timezone})."},
+            {"type": "text", "text": volatile},
         ]
 
     def _all_tools(self) -> list[dict]:
@@ -94,7 +98,8 @@ Rules:
             return result
         return json.dumps(result, ensure_ascii=False, default=str)
 
-    async def handle(self, chat_id: int, user_text: str, remember: bool = True) -> AgentReply:
+    async def handle(self, chat_id: int, user_text: str, remember: bool = True,
+                     spoken: bool = False) -> AgentReply:
         messages = self._history_messages(chat_id) if remember else []
         if messages and messages[-1]["role"] == "user":
             messages[-1]["content"] += "\n\n" + user_text
@@ -103,10 +108,14 @@ Rules:
 
         pending: list[int] = []
         final_text = ""
-        system = self.system_prompt()  # build once: must stay identical within a turn
+        system = self.system_prompt(spoken)  # build once: must stay identical within a turn
+        # Voice: think less and answer shorter, so the spoken reply arrives fast.
+        speed = {"output_config": {"effort": self.config.voice_effort}} if spoken else {}
+        model = (self.config.voice_model or self.config.model) if spoken else self.config.model
         for _ in range(MAX_STEPS):
             resp = await self.client.messages.create(
-                model=self.config.model,
+                model=model,
+                **speed,
                 max_tokens=4096,
                 # Caches the growing conversation, so each step of the tool loop
                 # re-reads the earlier steps at ~10% of the normal input price.

@@ -1,5 +1,6 @@
 """Telegram front-end. Start with:  python -m assistant.main"""
 import logging
+import time
 from datetime import time as dtime
 from zoneinfo import ZoneInfo
 
@@ -102,21 +103,24 @@ class Bot:
 
     async def ask_agent(self, chat_id: int, text: str, bot, remember=True, spoken=False) -> None:
         await bot.send_chat_action(chat_id, ChatAction.TYPING)
+        t0 = time.monotonic()
         try:
-            reply = await self.agent.handle(chat_id, text, remember=remember)
+            reply = await self.agent.handle(chat_id, text, remember=remember, spoken=spoken)
         except Exception as e:
             log.exception("Agent error")
             await bot.send_message(chat_id, f"Something went wrong: {e}")
             return
+        t1 = time.monotonic()
+        await self.send_reply(chat_id, reply, bot)  # text first: shows up while the audio is made
         if voice.wants_voice(self.voice_mode(), spoken) and self.config.openai_api_key:
             try:
                 await bot.send_chat_action(chat_id, ChatAction.RECORD_VOICE)
                 audio = await voice.speak(self.config, reply.text,
                                           voice=self.db.get("tts_voice"), style=self.db.get("tts_style"))
                 await bot.send_voice(chat_id, audio)
-            except Exception:  # the text reply below still arrives
+                log.info("timing: thinking %.1fs, speech %.1fs", t1 - t0, time.monotonic() - t1)
+            except Exception:  # the text reply already arrived
                 log.exception("Text-to-speech failed")
-        await self.send_reply(chat_id, reply, bot)
 
     # ----------------------------------------------------------- handlers
     async def on_start(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -202,6 +206,7 @@ class Bot:
         chat_id = update.effective_chat.id
         media = update.message.voice or update.message.audio
         await ctx.bot.send_chat_action(chat_id, ChatAction.TYPING)
+        t0 = time.monotonic()
         try:
             file = await media.get_file()
             audio = bytes(await file.download_as_bytearray())
@@ -214,6 +219,7 @@ class Bot:
         if not text:
             await update.message.reply_text("I couldn't hear any words in that voice message.")
             return
+        log.info("timing: listening %.1fs", time.monotonic() - t0)
         await update.message.reply_text(f"🎤 \"{text[:500]}\"")  # so mishearings are visible
         await self.ask_agent(chat_id, text, ctx.bot, spoken=True)
 

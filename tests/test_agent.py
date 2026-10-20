@@ -341,3 +341,14 @@ def test_voice_skill_always_loaded(tmp_path):
     db = DB(tmp_path / "t.db")
     names = [s.name for s in load_skills(["tasks"], db, cfg)]
     assert names == ["Tasks & reminders", "Voice"]
+
+
+def test_spoken_turn_is_fast(tmp_path):
+    agent, db, client = make(tmp_path, [([text("Hej!")], "end_turn"), ([text("Hej igen")], "end_turn")])
+    asyncio.run(agent.handle(1, "hej", spoken=True))
+    fast = client.calls[0]
+    assert fast["output_config"] == {"effort": "low"} and "read aloud" in fast["system"][1]["text"]
+    asyncio.run(agent.handle(1, "hej"))
+    normal = client.calls[1]
+    assert "output_config" not in normal and "read aloud" not in normal["system"][1]["text"]
+    assert fast["system"][0] == normal["system"][0]  # cached part unchanged

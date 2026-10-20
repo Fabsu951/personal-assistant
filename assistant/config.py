@@ -49,6 +49,9 @@ class Config:
     # Spoken replies: "auto" = answer voice messages with voice, "always", or "off".
     # Can also be changed from Telegram with /voice.
     voice_replies: str = field(default_factory=lambda: _env("VOICE_REPLIES", "auto"))
+    # Voice messages are answered with less thinking (and optionally a faster model) for speed.
+    voice_effort: str = field(default_factory=lambda: _env("VOICE_EFFORT", "low"))
+    voice_model: str = field(default_factory=lambda: _env("VOICE_MODEL", ""))
     tts_model: str = field(default_factory=lambda: _env("TTS_MODEL", "gpt-4o-mini-tts"))
     tts_voice: str = field(default_factory=lambda: _env("TTS_VOICE", "onyx"))
     # How the voice should sound (Ragnar can change this himself when asked).
