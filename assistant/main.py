@@ -8,7 +8,7 @@ from telegram.constants import ChatAction
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
                           MessageHandler, filters)
 
-from . import google_auth, voice
+from . import google_auth, strava, voice
 from .agent import Agent
 from .config import Config
 from .db import DB
@@ -27,6 +27,15 @@ BRIEFING_PROMPT = (
     "important things to do today. Skip any part whose account isn't connected."
 )
 
+WEEKLY_REVIEW_PROMPT = (
+    "Time for my weekly training review. Compare the last 7 days (workout_history, "
+    "strava_activities if Strava is connected, status_history) with my program and goals: "
+    "what went well, what was missed, progress on key lifts/runs, and how my body status "
+    "(sleep, energy, soreness, injuries) has been. Then propose next week's sessions with "
+    "days and concrete targets, adjusted to my status and this week's calendar. Ask if I "
+    "want them added to the calendar. Keep it short and motivating."
+)
+
 HELP = """Hi! I'm your personal assistant. Just talk to me normally, e.g.:
 
 • "What's on my calendar tomorrow?"
@@ -36,11 +45,14 @@ HELP = """Hi! I'm your personal assistant. Just talk to me normally, e.g.:
 • "Research the best eSIM for Japan"
 • "I spent 250 on lunch"
 • "Did legs today: squats 3x5 at 100 kg"
+• "Slept 6 hours, left knee aches" (I'll adapt your training)
 You can also send voice messages.
 
 Commands:
 /connect_google – link Gmail, Calendar & Drive
 /briefing – get your daily briefing now
+/review – weekly training review now
+/connect_strava – link Strava (workouts from your watch)
 /tasks – show open tasks
 /skills – what I can do
 /reset – clear our conversation memory (notes and tasks are kept)"""
@@ -117,6 +129,24 @@ class Bot:
         if await self.guard(update):
             await self.ask_agent(update.effective_chat.id, BRIEFING_PROMPT, ctx.bot, remember=False)
 
+    async def on_review(self, update: Update, ctx):
+        if await self.guard(update):
+            await self.ask_agent(update.effective_chat.id, WEEKLY_REVIEW_PROMPT, ctx.bot)
+
+    async def on_connect_strava(self, update: Update, ctx):
+        if not await self.guard(update):
+            return
+        try:
+            url = strava.start(self.config)
+        except Exception as e:
+            await update.message.reply_text(f"Can't start Strava connection: {e}")
+            return
+        await update.message.reply_text(
+            "1) Open this link and click 'Authorize':\n" + url +
+            "\n\n2) You'll end on a page that says it can't be reached. That's expected! "
+            "Copy the FULL address from the browser bar (starts with http://localhost) "
+            "and paste it here.")
+
     async def on_connect_google(self, update: Update, ctx):
         if not await self.guard(update):
             return
@@ -138,6 +168,13 @@ class Bot:
             return
         chat_id = update.effective_chat.id
         text = update.message.text or ""
+        if text.strip().startswith("http://localhost") and strava.is_strava_redirect(text):
+            try:
+                strava.finish(self.db, self.config, text)
+                await update.message.reply_text("Strava connected ✅ Try: 'What did I train this week?'")
+            except Exception as e:
+                await update.message.reply_text(f"That didn't work: {e}\nTry /connect_strava again.")
+            return
         if google_auth.is_waiting(chat_id) and text.strip().startswith("http://localhost"):
             try:
                 google_auth.finish(self.db, chat_id, text)
@@ -188,6 +225,10 @@ class Bot:
         if self.config.owner_id:
             await self.ask_agent(self.config.owner_id, BRIEFING_PROMPT, ctx.bot, remember=False)
 
+    async def job_weekly_review(self, ctx: ContextTypes.DEFAULT_TYPE):
+        if self.config.owner_id:  # remembered, so you can answer "yes, add them"
+            await self.ask_agent(self.config.owner_id, WEEKLY_REVIEW_PROMPT, ctx.bot)
+
     # -------------------------------------------------------------- run
     def run(self):
         app = Application.builder().token(self.config.telegram_token).build()
@@ -197,6 +238,8 @@ class Bot:
         app.add_handler(CommandHandler("tasks", self.on_tasks))
         app.add_handler(CommandHandler("briefing", self.on_briefing))
         app.add_handler(CommandHandler("connect_google", self.on_connect_google))
+        app.add_handler(CommandHandler("connect_strava", self.on_connect_strava))
+        app.add_handler(CommandHandler("review", self.on_review))
         app.add_handler(CallbackQueryHandler(self.on_button))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_text))
         app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, self.on_voice))
@@ -205,6 +248,10 @@ class Bot:
         if self.config.briefing_time.lower() != "off":
             hh, mm = map(int, self.config.briefing_time.split(":"))
             app.job_queue.run_daily(self.job_briefing,
+                                    time=dtime(hh, mm, tzinfo=ZoneInfo(self.config.timezone)))
+        if "fitness" in self.config.enabled_skills and self.config.weekly_review_time.lower() != "off":
+            hh, mm = map(int, self.config.weekly_review_time.split(":"))
+            app.job_queue.run_daily(self.job_weekly_review, days=(0,),  # 0 = Sunday
                                     time=dtime(hh, mm, tzinfo=ZoneInfo(self.config.timezone)))
         log.info("Assistant running with skills: %s", ", ".join(s.name for s in self.skills))
         app.run_polling(allowed_updates=Update.ALL_TYPES)

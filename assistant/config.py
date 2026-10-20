@@ -34,8 +34,13 @@ class Config:
     )
     # Daily briefing time, HH:MM in your timezone. "off" = no briefing.
     briefing_time: str = field(default_factory=lambda: _env("BRIEFING_TIME", "07:30"))
+    # Weekly training review, sent on Sundays at HH:MM (needs the fitness skill). "off" = none.
+    weekly_review_time: str = field(default_factory=lambda: _env("WEEKLY_REVIEW_TIME", "19:00"))
     google_client_id: str = field(default_factory=lambda: _env("GOOGLE_CLIENT_ID", ""))
     google_client_secret: str = field(default_factory=lambda: _env("GOOGLE_CLIENT_SECRET", ""))
+    # Strava (brings in workouts from Garmin/Apple Watch etc.) - connect with /connect_strava
+    strava_client_id: str = field(default_factory=lambda: _env("STRAVA_CLIENT_ID", ""))
+    strava_client_secret: str = field(default_factory=lambda: _env("STRAVA_CLIENT_SECRET", ""))
     # Voice messages are transcribed with OpenAI's speech-to-text API. Empty = voice off.
     openai_api_key: str = field(default_factory=lambda: _env("OPENAI_API_KEY", ""))
     transcribe_model: str = field(

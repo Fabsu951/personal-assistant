@@ -232,3 +232,56 @@ def test_blank_settings_use_defaults(monkeypatch):
     cfg = Config()
     assert cfg.model and cfg.timezone == "Asia/Taipei" and cfg.history_turns == 20
     assert "google" in cfg.enabled_skills and cfg.owner_id == 0 and str(cfg.data_dir) == "data"
+
+
+def test_body_status(tmp_path):
+    from assistant.skills.base import ToolContext
+    agent, db, _ = make(tmp_path, [])
+    ctx = ToolContext(db=db, config=agent.config, chat_id=1)
+    agent.tools["status_log"].handler({"sleep_hours": 6, "injuries": "left knee aches"}, ctx)
+    agent.tools["status_log"].handler({"weight_kg": 80.5, "energy": 8}, ctx)
+    rows = agent.tools["status_history"].handler({"days": 3}, ctx)
+    assert rows[0]["injuries"] == "left knee aches" and "weight_kg" not in rows[0]
+    assert rows[1]["weight_kg"] == 80.5
+
+
+def test_strava(tmp_path, monkeypatch):
+    import httpx
+    from assistant import strava
+    agent, db, _ = make(tmp_path, [])
+    cfg = agent.config
+    cfg.strava_client_id, cfg.strava_client_secret = "123", "secret"
+    assert "state=strava" in strava.start(cfg)
+    assert strava.is_strava_redirect("http://localhost/?state=strava&code=abc&scope=read")
+    assert not strava.is_strava_redirect("http://localhost/?code=abc&scope=https://www.googleapis.com/x")
+
+    calls = []
+
+    def fake_post(url, data, timeout):
+        calls.append(data["grant_type"])
+        return httpx.Response(200, json={"access_token": f"tok{len(calls)}", "refresh_token": "r",
+                                         "expires_at": 0 if len(calls) == 1 else 9999999999})
+
+    def fake_get(url, headers, params, timeout):
+        assert headers["Authorization"] == "Bearer tok2"  # expired token was refreshed first
+        return httpx.Response(200, json=[{"name": "Morning run", "sport_type": "Run",
+                                          "start_date_local": "2026-10-19T07:00:00Z",
+                                          "moving_time": 1800, "distance": 6000,
+                                          "average_heartrate": 150}])
+
+    monkeypatch.setattr(strava.httpx, "post", fake_post)
+    monkeypatch.setattr(strava.httpx, "get", fake_get)
+    strava.finish(db, cfg, "http://localhost/?state=strava&code=abc")
+    run = strava.activities(db, cfg, 7)[0]
+    assert calls == ["authorization_code", "refresh_token"]
+    assert run["distance_km"] == 6.0 and run["pace_min_per_km"] == "5:00" and run["moving_min"] == 30
+    assert db.get("strava_token")["access_token"] == "tok2"
+
+
+def test_strava_not_connected(tmp_path):
+    agent, db, client = make(tmp_path, [
+        ([tool_use("t1", "strava_activities", {})], "tool_use"),
+        ([text("Strava isn't connected.")], "end_turn"),
+    ])
+    asyncio.run(agent.handle(1, "runs?"))
+    assert "connect_strava" in client.calls[1]["messages"][-1]["content"][0]["content"]

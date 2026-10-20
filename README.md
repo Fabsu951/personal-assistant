@@ -6,7 +6,8 @@ Your own AI personal assistant that you chat with on Telegram. It can:
 - **Tasks & reminders**: keep a to-do list and send you reminders on Telegram at the right time
 - **Research & notes**: search the web and remember things for you
 - **Life admin**: log expenses, give monthly spending summaries, and track recurring bills
-- **Training coach**: keeps your training program, logs workouts and tracks your progress
+- **Training coach**: keeps your training program, logs workouts and how your body feels (sleep, energy, injuries), adapts sessions to that, and sends a weekly review every Sunday
+- **Strava**: workouts from Garmin, Apple Watch, Polar etc. come in automatically (optional)
 - **Voice messages**: talk instead of typing (needs an OpenAI key, see below)
 - **Daily briefing**: every morning (default 07:30), a summary of your day
 
@@ -70,6 +71,13 @@ Claude can't listen to audio, so voice messages are turned into text by OpenAI's
 
 The bot shows what it heard (🎤 "...") and then answers as if you had typed it.
 
+### Optional: Strava (10 min, free)
+Lets the training coach see runs, rides and other workouts from your watch. Garmin, Apple Watch (via an app like HealthFit), Polar, Coros and others can sync to Strava automatically.
+1. Log in at **strava.com**, then open **strava.com/settings/api**.
+2. Create an app: name "Ragnar", category "Training", website `http://localhost`, **Authorization Callback Domain** `localhost`. Upload any icon if it asks for one.
+3. Copy the **Client ID** and **Client Secret** into Railway → Variables as `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`.
+4. Send `/connect_strava` to the bot and follow its instructions (same copy-the-address trick as Google).
+
 ---
 
 ## Using it
@@ -80,6 +88,8 @@ Just chat normally. Useful commands:
 | `/briefing` | Daily summary right now |
 | `/tasks` | Open to-dos |
 | `/connect_google` | (Re)connect Gmail/Calendar/Drive |
+| `/connect_strava` | Connect Strava |
+| `/review` | Weekly training review right now (it also comes automatically on Sundays, 19:00) |
 | `/skills` | What it can do |
 | `/reset` | Clear chat memory (tasks, notes and expenses are kept) |
 

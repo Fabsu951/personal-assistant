@@ -1,7 +1,8 @@
-"""Training coach: keeps the training program, logs workouts and tracks progress."""
+"""Training coach: program, workout log, daily body status, Strava, progress."""
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from .. import strava
 from .base import Skill, Tool, schema
 
 TABLES = """
@@ -13,7 +14,13 @@ CREATE TABLE IF NOT EXISTS workout_sets (
     id INTEGER PRIMARY KEY AUTOINCREMENT, workout_id INTEGER, exercise TEXT,
     sets INTEGER, reps INTEGER, weight_kg REAL, distance_km REAL, minutes REAL
 );
+CREATE TABLE IF NOT EXISTS body_status (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, weight_kg REAL, sleep_hours REAL,
+    energy INTEGER, soreness INTEGER, resting_hr INTEGER, injuries TEXT, notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
+STATUS_FIELDS = ["weight_kg", "sleep_hours", "energy", "soreness", "resting_hr", "injuries", "notes"]
 PROGRAM_KEY = "fitness_program"
 
 
@@ -64,6 +71,29 @@ def exercise_progress(a, ctx):
     return rows[-30:] or "No logged sets for that exercise."
 
 
+def status_log(a, ctx):
+    values = [a.get(f) for f in STATUS_FIELDS]
+    sid = ctx.db.execute(
+        f"INSERT INTO body_status(date, {', '.join(STATUS_FIELDS)}) VALUES(?{',?' * len(STATUS_FIELDS)})",
+        (a.get("date") or _today(ctx), *values))
+    return f"Status #{sid} logged."
+
+
+def status_history(a, ctx):
+    since = (datetime.fromisoformat(_today(ctx)) - timedelta(days=int(a.get("days", 14)))).date()
+    rows = ctx.db.query(
+        f"SELECT date, {', '.join(STATUS_FIELDS)} FROM body_status WHERE date >= ? "
+        "ORDER BY date, id", (since.isoformat(),))
+    # leave out empty fields so the model sees only what was actually reported
+    return [{k: v for k, v in r.items() if v not in (None, "")} for r in rows] \
+        or "No status logged in that period."
+
+
+def strava_activities(a, ctx):
+    return strava.activities(ctx.db, ctx.config, int(a.get("days", 14))) \
+        or "No Strava activities in that period."
+
+
 def workout_delete(a, ctx):
     ctx.db.execute("DELETE FROM workout_sets WHERE workout_id=?", (a["workout_id"],))
     ctx.db.execute("DELETE FROM workouts WHERE id=?", (a["workout_id"],))
@@ -86,7 +116,7 @@ class FitnessSkill(Skill):
     def __init__(self):
         super().__init__(
             name="Training coach",
-            description="Keeps your training program, logs workouts and tracks progress.",
+            description="Training program, workout log, body status, Strava and progress.",
             instructions=(
                 "When the user describes a training program, save it with program_set (keep "
                 "their structure: days, exercises, sets x reps, goals). When they say they "
@@ -94,7 +124,14 @@ class FitnessSkill(Skill):
                 "exercise names. For 'what should I do today', read program_get and recent "
                 "workout_history and pick the next session. Suggest progression (e.g. +2.5 kg "
                 "when all reps were hit last time) based on exercise_progress, and point out "
-                "missed sessions kindly. To schedule training, use reminders or the calendar."
+                "missed sessions kindly. To schedule training, use reminders or the calendar. "
+                "When the user mentions sleep, weight, energy, soreness, pain or injuries, log "
+                "it with status_log (energy and soreness on a 1-10 scale). Before planning a "
+                "session, check status_history: after poor sleep, low energy or high soreness "
+                "suggest a lighter session; with an injury, avoid loading that body part and "
+                "suggest alternatives (you are not a doctor: for real pain, advise seeing one). "
+                "Runs, rides etc. from the user's watch come from Strava (strava_activities): "
+                "count them as done sessions and don't log them again with workout_log."
             ),
             tools=[
                 Tool("program_set", "Save (replace) the user's training program.",
@@ -115,6 +152,21 @@ class FitnessSkill(Skill):
                      workout_history),
                 Tool("exercise_progress", "Show the logged history of one exercise over time.",
                      schema({"exercise": {"type": "string"}}, ["exercise"]), exercise_progress),
+                Tool("status_log", "Log how the user's body feels today (any fields they mention).",
+                     schema({"date": {"type": "string", "description": "ISO date, default today"},
+                             "weight_kg": {"type": "number"}, "sleep_hours": {"type": "number"},
+                             "energy": {"type": "integer", "description": "1 (empty) - 10 (great)"},
+                             "soreness": {"type": "integer", "description": "1 (none) - 10 (very sore)"},
+                             "resting_hr": {"type": "integer"},
+                             "injuries": {"type": "string", "description": "e.g. 'left knee aches'"},
+                             "notes": {"type": "string"}}), status_log),
+                Tool("status_history", "Body status (sleep, weight, energy, injuries) over N days.",
+                     schema({"days": {"type": "integer", "description": "Default 14"}}),
+                     status_history),
+                Tool("strava_activities",
+                     "Activities synced to Strava (from the user's watch) over the last N days.",
+                     schema({"days": {"type": "integer", "description": "Default 14"}}),
+                     strava_activities),
                 Tool("workout_delete", "Delete a logged workout.",
                      schema({"workout_id": {"type": "integer"}}, ["workout_id"]), workout_delete),
             ],
