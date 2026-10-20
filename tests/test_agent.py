@@ -224,3 +224,11 @@ def test_voice_transcribes(monkeypatch):
     cfg.openai_api_key = "sk-test"
     assert asyncio.run(voice.transcribe(cfg, b"audio")) == "hej Ragnar"
     assert seen["auth"] == "Bearer sk-test"
+
+
+def test_blank_settings_use_defaults(monkeypatch):
+    for name in ["MODEL", "TIMEZONE", "HISTORY_TURNS", "DATA_DIR", "ENABLED_SKILLS", "OWNER_TELEGRAM_ID"]:
+        monkeypatch.setenv(name, "")
+    cfg = Config()
+    assert cfg.model and cfg.timezone == "Asia/Taipei" and cfg.history_turns == 20
+    assert "google" in cfg.enabled_skills and cfg.owner_id == 0 and str(cfg.data_dir) == "data"

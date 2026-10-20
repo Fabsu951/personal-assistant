@@ -202,7 +202,7 @@ class Bot:
         app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, self.on_voice))
 
         app.job_queue.run_repeating(self.job_reminders, interval=30, first=10)
-        if self.config.briefing_time:
+        if self.config.briefing_time.lower() != "off":
             hh, mm = map(int, self.config.briefing_time.split(":"))
             app.job_queue.run_daily(self.job_briefing,
                                     time=dtime(hh, mm, tzinfo=ZoneInfo(self.config.timezone)))
