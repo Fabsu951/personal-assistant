@@ -99,12 +99,14 @@ Rules:
         return json.dumps(result, ensure_ascii=False, default=str)
 
     async def handle(self, chat_id: int, user_text: str, remember: bool = True,
-                     spoken: bool = False) -> AgentReply:
+                     spoken: bool = False, attachments: list[dict] | None = None) -> AgentReply:
+        """attachments: Claude content blocks (photos, PDFs) sent along with this message."""
         messages = self._history_messages(chat_id) if remember else []
-        if messages and messages[-1]["role"] == "user":
-            messages[-1]["content"] += "\n\n" + user_text
-        else:
-            messages.append({"role": "user", "content": user_text})
+        prompt = user_text
+        if messages and messages[-1]["role"] == "user":  # merge, roles must alternate
+            prompt = messages.pop()["content"] + "\n\n" + user_text
+        content = [*attachments, {"type": "text", "text": prompt}] if attachments else prompt
+        messages.append({"role": "user", "content": content})
 
         pending: list[int] = []
         final_text = ""
@@ -162,8 +164,9 @@ Rules:
             final_text = final_text or "Sorry, that took too many steps. Could you break it down?"
 
         final_text = final_text or "Done."
-        if remember:
-            self.db.add_message(chat_id, "user", user_text)
+        if remember:  # history keeps text only; note that something was attached
+            note = f" [attached {len(attachments)} file(s)]" if attachments else ""
+            self.db.add_message(chat_id, "user", user_text + note)
             self.db.add_message(chat_id, "assistant", final_text)
         return AgentReply(final_text, pending)
 

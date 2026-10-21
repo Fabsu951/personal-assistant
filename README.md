@@ -9,6 +9,9 @@ Your own AI personal assistant that you chat with on Telegram. It can:
 - **Training coach**: keeps your training program, logs workouts and how your body feels (sleep, energy, injuries), adapts sessions to that, and sends a weekly review every Sunday
 - **Strava**: workouts from Garmin, Apple Watch, Polar etc. come in automatically (optional)
 - **Voice messages**: talk instead of typing, and get spoken answers back (needs an OpenAI key, see below)
+- **Travel**: cheapest flights and hotels (Google Flights/Hotels prices), trip plans and budgets
+- **Languages**: translates anything; send a photo of a menu, sign or letter and it translates it
+- **OneDrive**: search and read your Word, Excel, PowerPoint and PDF files (optional)
 - **Daily briefing**: every morning (default 07:30), a summary of your day
 
 **Safety:** it never sends an email or changes your calendar without asking. You get **✅ Approve / ❌ Reject** buttons first. Only *you* can talk to it.
@@ -89,6 +92,26 @@ answers out loud straight away (no play button) and listens again.
 
 Only your Telegram account can use the page (Telegram signs every request).
 
+### Optional: flight and hotel prices (5 min, free up to ~250 searches/month)
+1. Sign up at **serpapi.com** (free plan).
+2. Copy your **API key** from the dashboard into Railway → Variables as `SERPAPI_API_KEY`.
+3. Optional: `CURRENCY=TWD` (or EUR, USD…); the default is SEK.
+
+Try: *"Cheapest flight Taipei → Stockholm 10 Dec, back 5 Jan?"* Ragnar finds the prices and gives a
+Google Flights link to book; he never books or pays himself.
+
+### Optional: OneDrive (10 min, free)
+1. Go to **portal.azure.com** and sign in with the Microsoft account that has your OneDrive.
+   (If it asks you to create a free Azure account or directory first, do that.)
+2. Search for **App registrations** → **New registration**:
+   name `Ragnar`, account type **"Accounts in any organizational directory and personal Microsoft
+   accounts"**, no redirect URI → **Register**.
+3. Copy the **Application (client) ID** into Railway → Variables as `MS_CLIENT_ID`.
+4. In the app: **Authentication** → **Allow public client flows** → **Yes** → **Save**.
+5. Send `/connect_onedrive` to the bot, open the link, type the code and sign in.
+
+Access is read-only. A school or work OneDrive may need approval from that organisation's IT.
+
 ---
 
 ## Using it
@@ -99,6 +122,7 @@ Just chat normally. Useful commands:
 | `/briefing` | Daily summary right now |
 | `/tasks` | Open to-dos |
 | `/connect_google` | (Re)connect Gmail/Calendar/Drive |
+| `/connect_onedrive` | Connect OneDrive |
 | `/connect_strava` | Connect Strava |
 | `/talk` | Hands-free voice mode |
 | `/voice` | Spoken replies: `auto`, `always` or `off` |

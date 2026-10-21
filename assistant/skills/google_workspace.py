@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from googleapiclient.discovery import build
 
 from .. import google_auth
+from ..extract import can_read, text_from_file
 from .base import Skill, Tool, ToolContext, schema
 
 MAX_BODY = 8000
@@ -260,6 +261,9 @@ def drive_read(args, ctx):
         data = svc.files().export(fileId=meta["id"], mimeType=exports[mt]).execute()
     elif mt.startswith("text/") or mt in ("application/json", "text/csv"):
         data = svc.files().get_media(fileId=meta["id"]).execute()
+    elif can_read(meta["name"]):  # PDF, Word, Excel, PowerPoint files uploaded to Drive
+        text = text_from_file(meta["name"], svc.files().get_media(fileId=meta["id"]).execute())
+        return {**meta, "content": text[:MAX_BODY]}
     else:
         return {**meta, "note": "Can't read this file type as text; share the link instead."}
     text = data.decode("utf-8", "replace") if isinstance(data, bytes) else str(data)

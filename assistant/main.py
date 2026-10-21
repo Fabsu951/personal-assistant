@@ -1,4 +1,5 @@
 """Telegram front-end. Start with:  python -m assistant.main"""
+import base64
 import logging
 import time
 from datetime import time as dtime
@@ -10,10 +11,11 @@ from telegram.constants import ChatAction
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
                           MessageHandler, filters)
 
-from . import google_auth, strava, voice, web
+from . import google_auth, microsoft, strava, voice, web
 from .agent import Agent
 from .config import Config
 from .db import DB
+from .extract import can_read, text_from_file
 from .skills import load_skills
 from .skills.tasks import due_reminders
 
@@ -45,6 +47,8 @@ HELP = """Hi! I'm your personal assistant. Just talk to me normally, e.g.:
 • "Remind me to call mom at 6pm"
 • "Add 'renew passport' to my to-do list"
 • "Research the best eSIM for Japan"
+• "Cheapest flight Taipei → Stockholm in December?"
+• "Translate this" (send a photo of a menu or sign)
 • "I spent 250 on lunch"
 • "Did legs today: squats 3x5 at 100 kg"
 • "Slept 6 hours, left knee aches" (I'll adapt your training)
@@ -54,12 +58,18 @@ Commands:
 /connect_google – link Gmail, Calendar & Drive
 /briefing – get your daily briefing now
 /review – weekly training review now
+/connect_onedrive – link OneDrive
 /connect_strava – link Strava (workouts from your watch)
 /tasks – show open tasks
 /skills – what I can do
 /talk – hands-free voice mode
 /voice – spoken replies on/off
 /reset – clear our conversation memory (notes and tasks are kept)"""
+
+
+MAX_FILE = 20 * 1024 * 1024    # Telegram bots can download up to 20 MB
+MAX_IMAGE = 5 * 1024 * 1024    # Claude's limit per image
+IMAGE_TYPES = ("image/jpeg", "image/png", "image/gif", "image/webp")
 
 
 def split(text: str, n: int = 4000) -> list[str]:
@@ -106,11 +116,13 @@ class Bot:
     def voice_mode(self) -> str:
         return self.db.get("voice_replies", self.config.voice_replies)
 
-    async def ask_agent(self, chat_id: int, text: str, bot, remember=True, spoken=False) -> None:
+    async def ask_agent(self, chat_id: int, text: str, bot, remember=True, spoken=False,
+                        attachments=None) -> None:
         await bot.send_chat_action(chat_id, ChatAction.TYPING)
         t0 = time.monotonic()
         try:
-            reply = await self.agent.handle(chat_id, text, remember=remember, spoken=spoken)
+            reply = await self.agent.handle(chat_id, text, remember=remember, spoken=spoken,
+                                            attachments=attachments)
         except Exception as e:
             log.exception("Agent error")
             await bot.send_message(chat_id, f"Something went wrong: {e}")
@@ -249,6 +261,64 @@ class Bot:
         await update.message.reply_text(f"🎤 \"{text[:500]}\"")  # so mishearings are visible
         await self.ask_agent(chat_id, text, ctx.bot, spoken=True)
 
+    async def on_file(self, update: Update, ctx):
+        """Photos (menus, signs, receipts...), PDFs and documents sent in the chat."""
+        if not await self.guard(update):
+            return
+        msg, chat_id = update.message, update.effective_chat.id
+        if msg.photo:
+            media, mime, name = msg.photo[-1], "image/jpeg", "photo.jpg"
+        else:
+            media = msg.document
+            mime, name = media.mime_type or "", media.file_name or "file"
+        if (media.file_size or 0) > MAX_FILE:
+            await msg.reply_text("That file is too big for me (max 20 MB).")
+            return
+        await ctx.bot.send_chat_action(chat_id, ChatAction.TYPING)
+        data = bytes(await (await media.get_file()).download_as_bytearray())
+        b64 = base64.b64encode(data).decode()
+        if mime in IMAGE_TYPES and len(data) <= MAX_IMAGE:
+            block = {"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}}
+        elif mime == "application/pdf":
+            block = {"type": "document", "source": {"type": "base64", "media_type": mime, "data": b64}}
+        elif can_read(name):
+            try:
+                block = {"type": "text", "text": f"[File: {name}]\n{text_from_file(name, data)[:30000]}"}
+            except Exception:
+                log.exception("Could not read %s", name)
+                await msg.reply_text(f"I couldn't open {name}; the file may be damaged.")
+                return
+        else:
+            await msg.reply_text("I can read photos, PDFs, Word, Excel, PowerPoint and text files. "
+                                 "Big images: send them as a photo instead of a file.")
+            return
+        caption = msg.caption or ("(Sent without a comment. Work out what it is and help: e.g. "
+                                  "translate it if it's in another language, or log it if it's a receipt.)")
+        await self.ask_agent(chat_id, caption, ctx.bot, attachments=[block])
+
+    async def on_connect_onedrive(self, update: Update, ctx):
+        if not await self.guard(update):
+            return
+        chat_id = update.effective_chat.id
+        try:
+            flow = await microsoft.start(self.config)
+        except Exception as e:
+            await update.message.reply_text(f"Can't start OneDrive connection: {e}")
+            return
+        await update.message.reply_text(
+            f"1) Open {flow['verification_uri']}\n2) Enter this code (tap to copy below)\n"
+            "3) Sign in with the Microsoft account that has your OneDrive and accept.\n"
+            "I'll tell you here when it's done.")
+        await update.message.reply_text(flow["user_code"])
+
+        async def finish():
+            try:
+                await microsoft.wait_for_login(self.db, self.config, flow)
+                await ctx.bot.send_message(chat_id, "OneDrive connected ✅ Try: 'What's in my OneDrive?'")
+            except Exception as e:
+                await ctx.bot.send_message(chat_id, f"OneDrive connection failed: {e}")
+        ctx.application.create_task(finish())
+
     async def on_voice_setting(self, update: Update, ctx):
         if not await self.guard(update):
             return
@@ -314,9 +384,11 @@ class Bot:
         app.add_handler(CommandHandler("review", self.on_review))
         app.add_handler(CommandHandler("voice", self.on_voice_setting))
         app.add_handler(CommandHandler("talk", self.on_talk))
+        app.add_handler(CommandHandler("connect_onedrive", self.on_connect_onedrive))
         app.add_handler(CallbackQueryHandler(self.on_button))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_text))
         app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, self.on_voice))
+        app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, self.on_file))
 
         app.job_queue.run_repeating(self.job_reminders, interval=30, first=10)
         if self.config.briefing_time.lower() != "off":

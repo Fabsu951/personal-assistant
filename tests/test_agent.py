@@ -34,7 +34,7 @@ def make(tmp_path, script):
     cfg = Config()
     cfg.data_dir = tmp_path
     db = DB(tmp_path / "t.db")
-    skills = load_skills(["google", "tasks", "research", "admin", "fitness"], db, cfg)
+    skills = load_skills(["google", "tasks", "research", "admin", "fitness", "travel", "onedrive"], db, cfg)
     client = FakeClient(script)
     return Agent(cfg, db, skills, client=client), db, client
 
@@ -414,3 +414,146 @@ def test_web_talk(tmp_path, monkeypatch):
     assert data["reply"] == "Du har gym kl 18." and data["audio"] == "bXAzLWJ5dGVz"
     assert "read aloud" in client.calls[0]["system"][1]["text"]  # short spoken answer
     assert [m["role"] for m in db.history(42, 10)] == ["user", "assistant"]
+
+
+def test_extract_office_files(tmp_path):
+    import io
+    import zipfile
+    from openpyxl import Workbook
+    from assistant.extract import can_read, text_from_file
+
+    def office(files):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for name, xml in files.items():
+                z.writestr(name, xml)
+        return buf.getvalue()
+
+    docx = office({"word/document.xml": "<w:document><w:p><w:r><w:t>Hej &amp; välkommen</w:t></w:r></w:p>"
+                                        "<w:p><w:t>Rad två</w:t></w:p></w:document>"})
+    assert text_from_file("Brev.DOCX", docx).splitlines() == ["Hej & välkommen", "Rad två"]
+    pptx = office({"ppt/slides/slide2.xml": "<a:p><a:t>Andra</a:t></a:p>",
+                   "ppt/slides/slide1.xml": "<a:p><a:t>Första</a:t></a:p>"})
+    assert text_from_file("deck.pptx", pptx).index("Första") < text_from_file("deck.pptx", pptx).index("Andra")
+    wb = Workbook()
+    wb.active.append(["Datum", "Belopp"])
+    wb.active.append(["2026-10-01", 250])
+    buf = io.BytesIO()
+    wb.save(buf)
+    assert "2026-10-01,250" in text_from_file("budget.xlsx", buf.getvalue())
+    assert text_from_file("video.mp4", b"x") is None and not can_read("video.mp4") and can_read("a.PDF")
+
+
+def test_flights_search(tmp_path, monkeypatch):
+    import httpx
+    from assistant.skills import travel
+    from assistant.skills.base import ToolContext
+    agent, db, _ = make(tmp_path, [])
+    ctx = ToolContext(db=db, config=agent.config, chat_id=1)
+    assert "SERPAPI_API_KEY" in str(_raises(lambda: travel.flights_search(
+        {"from": "TPE", "to": "ARN", "depart_date": "2026-12-10"}, ctx)))
+    agent.config.serpapi_api_key = "k"
+    seen = {}
+
+    def leg(a, b, t1, t2, no, mins):
+        return {"departure_airport": {"id": a, "time": f"2026-12-10 {t1}"},
+                "arrival_airport": {"id": b, "time": f"2026-12-10 {t2}"},
+                "airline": no[:2], "flight_number": no, "duration": mins}
+
+    def fake_get(url, params, timeout):
+        seen.update(params)
+        return httpx.Response(200, json={
+            "best_flights": [{"price": 14000, "total_duration": 900, "flights": [leg("TPE", "ARN", "08:00", "18:00", "BR 67", 900)]}],
+            "other_flights": [{"price": 9800, "total_duration": 1300,
+                               "flights": [leg("TPE", "IST", "23:00", "06:00", "TK 25", 780),
+                                           leg("IST", "ARN", "09:00", "11:30", "TK 1795", 210)],
+                               "layovers": [{"id": "IST", "duration": 180}]}],
+            "price_insights": {"price_level": "low", "typical_price_range": [11000, 16000]},
+            "search_metadata": {"google_flights_url": "https://www.google.com/travel/flights?x"}})
+
+    monkeypatch.setattr(travel.httpx, "get", fake_get)
+    out = travel.flights_search({"from": "tpe, tsa", "to": "ARN", "depart_date": "2026-12-10",
+                                 "return_date": "2027-01-05", "max_stops": "max_1"}, ctx)
+    assert seen["departure_id"] == "TPE,TSA" and seen["type"] == 1 and seen["stops"] == 2
+    assert seen["currency"] == "SEK" and seen["sort_by"] == 2
+    cheapest = out["cheapest"][0]
+    assert cheapest["price"] == 9800 and cheapest["stops"] == 1 and cheapest["layovers"] == ["IST 3h00"]
+    assert cheapest["legs"][0] == "TPE 23:00 → IST 06:00 (TK 25, 13h00)"
+    assert out["price_level"] == "low" and out["google_flights_link"].startswith("https://")
+
+
+def _raises(fn):
+    try:
+        fn()
+    except Exception as e:
+        return e
+    raise AssertionError("expected an error")
+
+
+def test_onedrive(tmp_path, monkeypatch):
+    import io
+    import time
+    import zipfile
+    import httpx
+    from assistant import microsoft
+    from assistant.skills.base import ToolContext
+    agent, db, _ = make(tmp_path, [])
+    cfg = agent.config
+    cfg.ms_client_id = "app-id"
+    ctx = ToolContext(db=db, config=cfg, chat_id=1)
+    assert "connect_onedrive" in str(_raises(lambda: agent.tools["onedrive_search"].handler({"query": "x"}, ctx)))
+
+    # device-code login: pending once, then success
+    answers = [httpx.Response(400, json={"error": "authorization_pending"}),
+               httpx.Response(200, json={"access_token": "A1", "refresh_token": "R1", "expires_in": 3600})]
+
+    class FakeAsyncClient:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def post(self, url, data):
+            assert data["device_code"] == "dev" and url.endswith("/token")
+            return answers.pop(0)
+
+    async def no_sleep(s): pass
+    monkeypatch.setattr(microsoft.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(microsoft.asyncio, "sleep", no_sleep)
+    asyncio.run(microsoft.wait_for_login(db, cfg, {"device_code": "dev", "interval": 1, "expires_in": 60}))
+    assert db.get(microsoft.TOKEN_KEY)["access_token"] == "A1"
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("word/document.xml", "<w:p><w:t>Hyresavtal</w:t></w:p>")
+    item = {"id": "1", "name": "Avtal.docx", "size": 100, "webUrl": "https://onedrive/x",
+            "file": {}, "parentReference": {"path": "/drive/root:/Dokument"}}
+
+    def fake_get(url, params=None, follow_redirects=True, timeout=60, headers=None):
+        assert headers["Authorization"] == "Bearer A1"
+        if "search(q='hyres''avtal')" in url:
+            return httpx.Response(200, json={"value": [item]})
+        if url.endswith("/items/1/content"):
+            return httpx.Response(200, content=buf.getvalue())
+        if url.endswith("/items/1"):
+            return httpx.Response(200, json=item)
+        raise AssertionError(url)
+
+    monkeypatch.setattr(microsoft.httpx, "get", fake_get)
+    found = agent.tools["onedrive_search"].handler({"query": "hyres'avtal"}, ctx)
+    assert found[0]["name"] == "Avtal.docx" and found[0]["folder"] == "/Dokument"
+    read = agent.tools["onedrive_read"].handler({"file_id": "1"}, ctx)
+    assert read["content"].strip() == "Hyresavtal"
+    db.set(microsoft.TOKEN_KEY, {**db.get(microsoft.TOKEN_KEY), "expires_at": time.time() - 1})
+    monkeypatch.setattr(microsoft.httpx, "post", lambda url, timeout, data: httpx.Response(
+        200, json={"access_token": "A1", "refresh_token": "R2", "expires_in": 3600}))
+    agent.tools["onedrive_search"].handler({"query": "hyres'avtal"}, ctx)  # refreshed first
+    assert db.get(microsoft.TOKEN_KEY)["refresh_token"] == "R2"
+
+
+def test_photo_attachment(tmp_path):
+    agent, db, client = make(tmp_path, [([text("Det står 'Nötkött nudlar'.")], "end_turn")])
+    db.add_message(1, "user", "hej")  # an unanswered earlier message gets merged in
+    img = {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "AAA="}}
+    asyncio.run(agent.handle(1, "Översätt", attachments=[img]))
+    sent = client.calls[0]["messages"][-1]["content"]
+    assert sent[0] == img and sent[1] == {"type": "text", "text": "hej\n\nÖversätt"}
+    assert db.history(1, 10)[-2]["content"] == "Översätt [attached 1 file(s)]"

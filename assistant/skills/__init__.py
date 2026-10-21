@@ -9,8 +9,10 @@ from .admin import AdminSkill
 from .base import Skill
 from .fitness import FitnessSkill
 from .google_workspace import GoogleSkill
+from .onedrive import OneDriveSkill
 from .research import ResearchSkill
 from .tasks import TasksSkill
+from .travel import TravelSkill
 from .voice_settings import VoiceSkill
 
 AVAILABLE = {
@@ -20,6 +22,8 @@ AVAILABLE = {
     "admin": AdminSkill,
     "fitness": FitnessSkill,
     "voice": VoiceSkill,
+    "travel": TravelSkill,
+    "onedrive": OneDriveSkill,
 }
 CORE = ["voice"]  # always on, whatever ENABLED_SKILLS says
 

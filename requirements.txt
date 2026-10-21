@@ -7,3 +7,5 @@ python-dotenv>=1.0
 tzdata
 httpx
 aiohttp
+pypdf
+openpyxl

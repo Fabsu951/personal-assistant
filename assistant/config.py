@@ -30,7 +30,7 @@ class Config:
     owner_name: str = field(default_factory=lambda: _env("OWNER_NAME", "Fabian"))
     # Comma-separated list of skills to switch on.
     enabled_skills: list[str] = field(
-        default_factory=lambda: _list(_env("ENABLED_SKILLS", "google,tasks,research,admin,fitness"))
+        default_factory=lambda: _list(_env("ENABLED_SKILLS", "google,tasks,research,admin,fitness,travel,onedrive"))
     )
     # Daily briefing time, HH:MM in your timezone. "off" = no briefing.
     briefing_time: str = field(default_factory=lambda: _env("BRIEFING_TIME", "07:30"))
@@ -41,6 +41,12 @@ class Config:
     # Strava (brings in workouts from Garmin/Apple Watch etc.) - connect with /connect_strava
     strava_client_id: str = field(default_factory=lambda: _env("STRAVA_CLIENT_ID", ""))
     strava_client_secret: str = field(default_factory=lambda: _env("STRAVA_CLIENT_SECRET", ""))
+    # Flight and hotel prices (Google Flights/Hotels via serpapi.com, free tier ~250 searches/month)
+    serpapi_api_key: str = field(default_factory=lambda: _env("SERPAPI_API_KEY", ""))
+    currency: str = field(default_factory=lambda: _env("CURRENCY", "SEK"))
+    # OneDrive (Microsoft) - connect with /connect_onedrive
+    ms_client_id: str = field(default_factory=lambda: _env("MS_CLIENT_ID", ""))
+    ms_tenant: str = field(default_factory=lambda: _env("MS_TENANT", "common"))
     # Voice messages are transcribed with OpenAI's speech-to-text API. Empty = voice off.
     openai_api_key: str = field(default_factory=lambda: _env("OPENAI_API_KEY", ""))
     transcribe_model: str = field(
