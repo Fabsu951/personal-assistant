@@ -5,8 +5,8 @@ import time
 from datetime import time as dtime
 from zoneinfo import ZoneInfo
 
-from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, Update,
-                      WebAppInfo)
+from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, InputFile, MenuButtonWebApp,
+                      Update, WebAppInfo)
 from telegram.constants import ChatAction
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
                           MessageHandler, filters)
@@ -26,9 +26,12 @@ log = logging.getLogger("assistant")
 BRIEFING_PROMPT = (
     "Give me my morning briefing. Check: today's calendar events, important unread emails "
     "from the last 24 hours (skip newsletters/promotions), open tasks that are due soon or "
-    "overdue, recurring bills due in the next 5 days, and today's planned workout (if a "
-    "training program is set). Keep it short and scannable, then suggest the 1-3 most "
-    "important things to do today. Skip any part whose account isn't connected."
+    "overdue, recurring bills due in the next 5 days, today's planned workout (if a training "
+    "program is set), and anything else due soon that you can see: flashcards due, content "
+    "to film or publish, job application deadlines within a week, birthdays within a week, "
+    "habits to do today and budget categories close to their limit. Keep it short and "
+    "scannable, then suggest the 1-3 most important things to do today. Skip any part that "
+    "has nothing in it or whose account isn't connected."
 )
 
 WEEKLY_REVIEW_PROMPT = (
@@ -49,6 +52,8 @@ HELP = """Hi! I'm your personal assistant. Just talk to me normally, e.g.:
 • "Research the best eSIM for Japan"
 • "Cheapest flight Taipei → Stockholm in December?"
 • "Translate this" (send a photo of a menu or sign)
+• "Quiz me on Fin Inve" · "Write a report on … as a Word file"
+• "Let's brainstorm video ideas" · "Mom's birthday is 3 May"
 • "I spent 250 on lunch"
 • "Did legs today: squats 3x5 at 100 kg"
 • "Slept 6 hours, left knee aches" (I'll adapt your training)
@@ -101,7 +106,12 @@ class Bot:
     async def send_reply(self, chat_id: int, reply, bot) -> None:
         for chunk in split(reply.text):
             await bot.send_message(chat_id, chunk)
+        await self.send_files(chat_id, reply.files, bot)
         await self.send_approvals(chat_id, reply.pending_ids, bot)
+
+    async def send_files(self, chat_id: int, files: list, bot) -> None:
+        for name, data in files:
+            await bot.send_document(chat_id, InputFile(data, filename=name))
 
     async def send_approvals(self, chat_id: int, pending_ids: list[int], bot) -> None:
         for pid in pending_ids:

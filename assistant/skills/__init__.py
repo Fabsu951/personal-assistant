@@ -7,13 +7,23 @@ HOW TO ADD A NEW AGENT / SPECIALIST
 """
 from .admin import AdminSkill
 from .base import Skill
+from .budget import BudgetSkill
+from .career import CareerSkill
+from .content import ContentSkill
 from .fitness import FitnessSkill
 from .google_workspace import GoogleSkill
+from .habits import HabitsSkill
+from .ideas import IdeasSkill
+from .journal import JournalSkill
+from .nutrition import NutritionSkill
 from .onedrive import OneDriveSkill
+from .people import PeopleSkill
 from .research import ResearchSkill
+from .study import StudySkill
 from .tasks import TasksSkill
 from .travel import TravelSkill
 from .voice_settings import VoiceSkill
+from .writing import WritingSkill
 
 AVAILABLE = {
     "google": GoogleSkill,
@@ -24,6 +34,16 @@ AVAILABLE = {
     "voice": VoiceSkill,
     "travel": TravelSkill,
     "onedrive": OneDriveSkill,
+    "study": StudySkill,
+    "writing": WritingSkill,
+    "ideas": IdeasSkill,
+    "content": ContentSkill,
+    "career": CareerSkill,
+    "budget": BudgetSkill,
+    "nutrition": NutritionSkill,
+    "habits": HabitsSkill,
+    "people": PeopleSkill,
+    "journal": JournalSkill,
 }
 CORE = ["voice"]  # always on, whatever ENABLED_SKILLS says
 

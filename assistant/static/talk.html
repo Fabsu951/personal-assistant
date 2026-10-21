@@ -158,6 +158,7 @@ async function send() {
     if (data.error) { add("note", data.error); if (res.status === 403) return endConversation(); }
     if (data.reply) add("ragnar", data.reply);
     if (data.pending) add("note", "Godkänn eller avvisa i Telegram-chatten.");
+    if (data.files) add("note", "Filen finns i Telegram-chatten.");
     if (data.audio) return play(data.audio);
   } catch (e) {
     add("note", "Kunde inte nå Ragnar. Kontrollera uppkopplingen.");

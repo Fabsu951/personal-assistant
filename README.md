@@ -12,6 +12,16 @@ Your own AI personal assistant that you chat with on Telegram. It can:
 - **Travel**: cheapest flights and hotels (Google Flights/Hotels prices), trip plans and budgets
 - **Languages**: translates anything; send a photo of a menu, sign or letter and it translates it
 - **OneDrive**: search and read your Word, Excel, PowerPoint and PDF files (optional)
+- **Studies**: flashcards with spaced repetition, quizzes, explanations and exam study plans
+- **Writing**: reports, essays, letters and CVs, delivered as Word files in the chat
+- **Ideas**: brainstorm partner and an idea bank
+- **Content**: video/post pipeline, scripts, hooks, captions and LinkedIn posts
+- **Career**: application tracker, tailored CVs and cover letters, mock interviews
+- **Budget**: monthly budgets per category and savings goals
+- **Food**: meal log (also from photos) with calories/protein, recipes, shopping list
+- **Habits & goals**: habit streaks and goals with progress
+- **People**: birthdays, notes and gift ideas, keeping in touch
+- **Journal**: diary with mood, reflection and help with decisions
 - **Daily briefing**: every morning (default 07:30), a summary of your day
 
 **Safety:** it never sends an email or changes your calendar without asking. You get **✅ Approve / ❌ Reject** buttons first. Only *you* can talk to it.

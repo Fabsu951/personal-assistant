@@ -19,6 +19,7 @@ MAX_STEPS = 15  # safety limit on tool calls per message
 class AgentReply:
     text: str
     pending_ids: list[int] = field(default_factory=list)
+    files: list = field(default_factory=list)  # (filename, bytes) to send with the reply
 
 
 class Agent:
@@ -67,7 +68,9 @@ Rules:
                          "Answer in 1-3 short, natural sentences. No lists, links or emojis. "
                          "Offer more detail only if they ask.")
         return [
-            {"type": "text", "text": stable, "cache_control": {"type": "ephemeral"}},
+            # 1 hour: chats come in bursts spread over the day, so the ~10k-token tools +
+            # instructions survive the pauses (5-minute entries would be rewritten each time).
+            {"type": "text", "text": stable, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
             {"type": "text", "text": volatile},
         ]
 
@@ -87,8 +90,9 @@ Rules:
         return msgs
 
     # ------------------------------------------------------------------
-    async def run_tool(self, tool: Tool, args: dict, chat_id: int) -> str:
-        ctx = ToolContext(db=self.db, config=self.config, chat_id=chat_id)
+    async def run_tool(self, tool: Tool, args: dict, chat_id: int, files: list | None = None) -> str:
+        ctx = ToolContext(db=self.db, config=self.config, chat_id=chat_id,
+                          files=files if files is not None else [])
         try:
             result = await asyncio.to_thread(tool.handler, args, ctx)
         except Exception as e:  # the model sees the error and can recover
@@ -109,6 +113,7 @@ Rules:
         messages.append({"role": "user", "content": content})
 
         pending: list[int] = []
+        files: list = []
         final_text = ""
         system = self.system_prompt(spoken)  # build once: must stay identical within a turn
         # Voice: think less and answer shorter, so the spoken reply arrives fast.
@@ -157,7 +162,7 @@ Rules:
                     out = (f"Not executed yet: queued as action #{pid}. The user now sees "
                            "Approve/Reject buttons. Do not say it is done.")
                 else:
-                    out = await self.run_tool(tool, block.input, chat_id)
+                    out = await self.run_tool(tool, block.input, chat_id, files)
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
             messages.append({"role": "user", "content": results})
         else:
@@ -168,7 +173,7 @@ Rules:
             note = f" [attached {len(attachments)} file(s)]" if attachments else ""
             self.db.add_message(chat_id, "user", user_text + note)
             self.db.add_message(chat_id, "assistant", final_text)
-        return AgentReply(final_text, pending)
+        return AgentReply(final_text, pending, files)
 
     # ------------------------------------------------------------------
     async def resolve_action(self, action_id: int, approve: bool) -> str:

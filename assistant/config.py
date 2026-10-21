@@ -30,7 +30,7 @@ class Config:
     owner_name: str = field(default_factory=lambda: _env("OWNER_NAME", "Fabian"))
     # Comma-separated list of skills to switch on.
     enabled_skills: list[str] = field(
-        default_factory=lambda: _list(_env("ENABLED_SKILLS", "google,tasks,research,admin,fitness,travel,onedrive"))
+        default_factory=lambda: _list(_env("ENABLED_SKILLS", "google,tasks,research,admin,fitness,travel,onedrive,study,writing,ideas,content,career,budget,nutrition,habits,people,journal"))
     )
     # Daily briefing time, HH:MM in your timezone. "off" = no briefing.
     briefing_time: str = field(default_factory=lambda: _env("BRIEFING_TIME", "07:30"))

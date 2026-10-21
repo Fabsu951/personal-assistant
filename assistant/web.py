@@ -102,6 +102,8 @@ class WebApp:
             return web.json_response({"heard": heard, "error": f"Something went wrong: {e}"},
                                      status=500)
         t2 = time.monotonic()
+        if reply.files:  # documents arrive in the Telegram chat
+            await self.bot.send_files(chat_id, reply.files, self.bot.app.bot)
         if reply.pending_ids:  # approve/reject buttons live in the Telegram chat
             await self.bot.send_approvals(chat_id, reply.pending_ids, self.bot.app.bot)
         audio_b64 = None
@@ -114,7 +116,7 @@ class WebApp:
         log.info("timing (web): listening %.1fs, thinking %.1fs, speech %.1fs",
                  t1 - t0, t2 - t1, time.monotonic() - t2)
         return web.json_response({"heard": heard, "reply": reply.text, "audio": audio_b64,
-                                  "pending": len(reply.pending_ids)})
+                                  "pending": len(reply.pending_ids), "files": len(reply.files)})
 
     async def start(self) -> None:
         self.runner = web.AppRunner(self.app, access_log=None)

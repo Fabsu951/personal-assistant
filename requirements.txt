@@ -9,3 +9,4 @@ httpx
 aiohttp
 pypdf
 openpyxl
+python-docx

@@ -34,7 +34,7 @@ def make(tmp_path, script):
     cfg = Config()
     cfg.data_dir = tmp_path
     db = DB(tmp_path / "t.db")
-    skills = load_skills(["google", "tasks", "research", "admin", "fitness", "travel", "onedrive"], db, cfg)
+    skills = load_skills(cfg.enabled_skills, db, cfg)
     client = FakeClient(script)
     return Agent(cfg, db, skills, client=client), db, client
 
@@ -122,7 +122,7 @@ def test_prompt_caching(tmp_path):
     call = client.calls[0]
     assert call["cache_control"] == {"type": "ephemeral"}
     stable, now = call["system"]
-    assert stable["cache_control"] == {"type": "ephemeral"}
+    assert stable["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
     # the time changes every minute, so it must not be inside the cached block
     assert "Current date and time" not in stable["text"] and "Current date and time" in now["text"]
     assert "cache_control" not in now
@@ -557,3 +557,151 @@ def test_photo_attachment(tmp_path):
     sent = client.calls[0]["messages"][-1]["content"]
     assert sent[0] == img and sent[1] == {"type": "text", "text": "hej\n\nÖversätt"}
     assert db.history(1, 10)[-2]["content"] == "Översätt [attached 1 file(s)]"
+
+
+def _ctx(tmp_path):
+    from assistant.skills.base import ToolContext
+    agent, db, _ = make(tmp_path, [])
+    return agent, ToolContext(db=db, config=agent.config, chat_id=1)
+
+
+def test_tool_names_unique_and_valid(tmp_path):
+    import re
+    from assistant.skills import AVAILABLE
+    cfg = Config()
+    names = [t.name for s in load_skills(list(AVAILABLE), DB(tmp_path / "t.db"), cfg) for t in s.tools]
+    assert len(names) == len(set(names))
+    assert all(re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", n) for n in names)
+
+
+def test_document_is_sent_as_file(tmp_path):
+    import io
+    from docx import Document
+    agent, db, client = make(tmp_path, [
+        ([tool_use("t1", "document_create", {"title": "Rapport: Bioinspirerad design",
+                                             "content": "# Inledning\nText med **fet** stil.\n- punkt ett\n1. steg ett"})], "tool_use"),
+        ([text("Här är rapporten.")], "end_turn"),
+    ])
+    reply = asyncio.run(agent.handle(1, "skriv en rapport"))
+    (name, data), = reply.files
+    assert name == "Rapport_Bioinspirerad_design.docx"
+    doc = Document(io.BytesIO(data))
+    texts = [p.text for p in doc.paragraphs]
+    assert texts[:3] == ["Rapport: Bioinspirerad design", "Inledning", "Text med fet stil."]
+    assert doc.paragraphs[2].runs[1].bold and "punkt ett" in texts and "steg ett" in texts
+
+
+def test_flashcards_spaced_repetition(tmp_path):
+    from assistant.skills.study import next_review
+    agent, ctx = _ctx(tmp_path)
+    t = agent.tools
+    t["flashcards_add"].handler({"deck": "Mandarin", "cards": [{"front": "謝謝", "back": "xièxie – tack"},
+                                                               {"front": "你好", "back": "nǐ hǎo – hej"}]}, ctx)
+    due = t["flashcards_due"].handler({"deck": "mandarin"}, ctx)
+    assert len(due) == 2
+    t["flashcard_grade"].handler({"card_id": due[0]["id"], "grade": "good"}, ctx)
+    assert len(t["flashcards_due"].handler({}, ctx)) == 1
+    assert t["flashcard_decks"].handler({}, ctx)[0] == {"deck": "Mandarin", "cards": 2, "due_now": 1}
+    assert next_review(0, 2.5, 0, "good")[0] == 1 and next_review(1, 2.5, 1, "good")[0] == 3
+    assert next_review(3, 2.5, 2, "good")[0] == 8 and next_review(8, 2.5, 3, "again")[:1] == (0,)
+
+
+def test_ideas_content_career(tmp_path):
+    agent, ctx = _ctx(tmp_path)
+    t = agent.tools
+    t["idea_save"].handler({"title": "App som slår ihop 3 appar", "tags": "app,video"}, ctx)
+    t["idea_update"].handler({"idea_id": 1, "add_details": "Börja med kalender", "status": "exploring"}, ctx)
+    idea = t["idea_list"].handler({"query": "video"}, ctx)[0]
+    assert idea["status"] == "exploring" and "kalender" in idea["details"]
+    t["content_add"].handler({"title": "3 appar → 1", "platform": "TikTok", "publish_date": "2026-10-24"}, ctx)
+    t["content_update"].handler({"content_id": 1, "status": "filmed", "script": "Hook: ..."}, ctx)
+    assert t["content_list"].handler({}, ctx)[0]["status"] == "filmed"
+    assert t["content_script"].handler({"content_id": 1}, ctx)["script"] == "Hook: ..."
+    t["content_update"].handler({"content_id": 1, "status": "published"}, ctx)
+    assert t["content_list"].handler({}, ctx) == "Nothing in the content plan."
+    t["application_add"].handler({"company": "TSMC", "role": "Intern", "deadline": "2026-11-15"}, ctx)
+    t["application_update"].handler({"application_id": 1, "status": "applied", "add_note": "Skickat CV"}, ctx)
+    app = t["application_list"].handler({}, ctx)[0]
+    assert app["status"] == "applied" and app["applied_on"] and "Skickat CV" in app["notes"]
+
+
+def test_budget_and_savings(tmp_path):
+    from assistant.skills.base import today
+    agent, ctx = _ctx(tmp_path)
+    t = agent.tools
+    t["budget_set"].handler({"category": "Food", "monthly_limit": 6000, "currency": "TWD"}, ctx)
+    t["expense_add"].handler({"amount": 4800, "category": "food", "currency": "TWD",
+                              "date": today(ctx).isoformat()}, ctx)
+    b = t["budget_status"].handler({}, ctx)["budgets"][0]
+    assert b["spent"] == 4800 and b["used_percent"] == 80 and b["left"] == 1200
+    t["savings_goal_add"].handler({"name": "Japan", "target": 30000, "deadline": "2099-01-01"}, ctx)
+    t["savings_goal_update"].handler({"goal_id": 1, "add": 3000}, ctx)
+    g = t["savings_goals"].handler({}, ctx)[0]
+    assert g["saved"] == 3000 and g["percent"] == 10 and g["needed_per_month"] > 0
+
+
+def test_nutrition_and_shopping(tmp_path):
+    agent, ctx = _ctx(tmp_path)
+    t = agent.tools
+    t["meal_log"].handler({"description": "牛肉麵", "kcal": 650, "protein_g": 35}, ctx)
+    t["meal_log"].handler({"description": "Protein shake", "kcal": 150, "protein_g": 25}, ctx)
+    day = t["nutrition_summary"].handler({}, ctx)["per_day"][0]
+    assert day["kcal"] == 800 and day["protein_g"] == 60 and day["meals"] == 2
+    t["shopping_add"].handler({"items": ["ägg", "kyckling", "ris"]}, ctx)
+    t["shopping_done"].handler({"item_ids": [1]}, ctx)
+    assert [i["item"] for i in t["shopping_list"].handler({}, ctx)] == ["kyckling", "ris"]
+    t["shopping_done"].handler({"all": True}, ctx)
+    assert t["shopping_list"].handler({}, ctx) == "Shopping list is empty."
+
+
+def test_habits_and_goals(tmp_path):
+    from datetime import timedelta
+    from assistant.skills.base import today
+    from assistant.skills.habits import streak
+    agent, ctx = _ctx(tmp_path)
+    t = agent.tools
+    t["habit_add"].handler({"name": "Läsa 20 min"}, ctx)
+    now = today(ctx)
+    for d in (1, 2):
+        t["habit_done"].handler({"habits": ["läsa"], "date": (now - timedelta(days=d)).isoformat()}, ctx)
+    h = t["habit_status"].handler({}, ctx)[0]
+    assert h["streak_days"] == 2 and not h["done_today"]
+    assert t["habit_done"].handler({"habits": ["Läsa", "meditera"]}, ctx) == {"checked": ["Läsa 20 min"], "not_found": ["meditera"]}
+    assert t["habit_status"].handler({}, ctx)[0]["streak_days"] == 3
+    assert streak(set(), now) == 0
+    t["goal_add"].handler({"title": "120 kg knäböj", "target_date": "2027-06-01"}, ctx)
+    t["goal_update"].handler({"goal_id": 1, "progress": 40, "note": "105 kg idag"}, ctx)
+    g = t["goal_list"].handler({}, ctx)[0]
+    assert g["progress"] == 40 and "105 kg" in g["recent_log"]
+
+
+def test_people_and_birthdays(tmp_path):
+    from datetime import date
+    from assistant.skills.base import today
+    from assistant.skills.people import days_until_birthday
+    agent, ctx = _ctx(tmp_path)
+    t = agent.tools
+    now = today(ctx)
+    soon = date(2000, now.month, now.day) if (now.month, now.day) != (2, 29) else date(2000, 3, 1)
+    t["contact_save"].handler({"name": "Mamma", "relation": "mother", "birthday": soon.isoformat(),
+                               "add_gift_idea": "Teservis"}, ctx)
+    t["contact_save"].handler({"name": "mamma", "add_note": "Gillar trädgård"}, ctx)  # same person
+    c = t["contact_find"].handler({"query": "trädgård"}, ctx)[0]
+    assert c["relation"] == "mother" and "Teservis" in c["gift_ideas"]
+    b = t["birthdays_upcoming"].handler({"days": 7}, ctx)[0]
+    assert b["in_days"] == 0 and b["turns"] == now.year - 2000
+    assert t["contacts_neglected"].handler({}, ctx)[0]["name"] == "Mamma"
+    t["contact_touch"].handler({"name": "Mamma", "note": "Pratade om jul"}, ctx)
+    assert t["contacts_neglected"].handler({}, ctx) == "You're in touch with everyone."
+    assert days_until_birthday("02-29", date(2027, 2, 28)) == 1 and days_until_birthday("12-31", date(2026, 1, 1)) == 364
+
+
+def test_journal(tmp_path):
+    agent, ctx = _ctx(tmp_path)
+    t = agent.tools
+    t["journal_add"].handler({"entry": "Stressig dag inför tentan", "mood": 4, "tags": "plugg"}, ctx)
+    t["journal_add"].handler({"entry": "Bra träning", "mood": 8}, ctx)
+    assert len(t["journal_read"].handler({}, ctx)) == 2
+    assert t["journal_read"].handler({"query": "tentan"}, ctx)[0]["mood"] == 4
+    trend = t["mood_trend"].handler({}, ctx)
+    assert trend["average"] == 6.0 and trend["lowest"] == 6.0  # one day, averaged

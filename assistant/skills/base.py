@@ -6,7 +6,9 @@ create a new file in this folder with a Skill subclass and register it in
 skills/__init__.py.
 """
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 
 @dataclass
@@ -15,6 +17,13 @@ class ToolContext:
     db: Any
     config: Any
     chat_id: int = 0
+    # Files a tool wants sent to the user with the reply: (filename, bytes).
+    files: list = field(default_factory=list)
+
+
+def today(ctx: ToolContext) -> date:
+    """Today's date in the user's timezone (not the server's)."""
+    return datetime.now(ZoneInfo(ctx.config.timezone)).date()
 
 
 @dataclass
