@@ -58,6 +58,10 @@ class Config:
     tts_style: str = field(default_factory=lambda: _env(
         "TTS_STYLE", "Warm, cheerful and upbeat, like a friendly personal coach who is smiling. "
                      "Natural energy and a lively but relaxed pace."))
+    # Hands-free voice page. Railway sets RAILWAY_PUBLIC_DOMAIN once you generate a domain.
+    web_url: str = field(default_factory=lambda: _env("WEB_URL") or (
+        f"https://{_env('RAILWAY_PUBLIC_DOMAIN')}" if _env("RAILWAY_PUBLIC_DOMAIN") else ""))
+    port: int = field(default_factory=lambda: int(_env("PORT", "8080")))
     data_dir: Path = field(default_factory=lambda: Path(
         _env("DATA_DIR", "/data" if Path("/data").is_dir() else "./data")))
     history_turns: int = field(default_factory=lambda: int(_env("HISTORY_TURNS", "20")))

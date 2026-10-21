@@ -42,8 +42,9 @@ def for_speech(text: str) -> str:
     return text.strip()[:4000]  # the API takes at most 4096 characters
 
 
-async def speak(config, text: str, voice: str | None = None, style: str | None = None) -> bytes:
-    """Text -> an OGG/Opus voice message that Telegram plays inline."""
+async def speak(config, text: str, voice: str | None = None, style: str | None = None,
+                fmt: str = "opus") -> bytes:
+    """Text -> audio: OGG/Opus for Telegram voice messages, mp3 for the voice page."""
     if not config.openai_api_key:
         raise RuntimeError("voice replies need the OPENAI_API_KEY setting (see README).")
     async with httpx.AsyncClient(timeout=120) as client:
@@ -51,7 +52,7 @@ async def speak(config, text: str, voice: str | None = None, style: str | None =
             SPEECH_URL,
             headers={"Authorization": f"Bearer {config.openai_api_key}"},
             json={"model": config.tts_model, "voice": voice or config.tts_voice,
-                  "input": for_speech(text), "response_format": "opus",
+                  "input": for_speech(text), "response_format": fmt,
                   "instructions": (style or config.tts_style)
                   + " Speak in the language of the text."},
         )

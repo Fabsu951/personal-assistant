@@ -4,12 +4,13 @@ import time
 from datetime import time as dtime
 from zoneinfo import ZoneInfo
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, Update,
+                      WebAppInfo)
 from telegram.constants import ChatAction
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
                           MessageHandler, filters)
 
-from . import google_auth, strava, voice
+from . import google_auth, strava, voice, web
 from .agent import Agent
 from .config import Config
 from .db import DB
@@ -56,6 +57,7 @@ Commands:
 /connect_strava – link Strava (workouts from your watch)
 /tasks – show open tasks
 /skills – what I can do
+/talk – hands-free voice mode
 /voice – spoken replies on/off
 /reset – clear our conversation memory (notes and tasks are kept)"""
 
@@ -89,7 +91,10 @@ class Bot:
     async def send_reply(self, chat_id: int, reply, bot) -> None:
         for chunk in split(reply.text):
             await bot.send_message(chat_id, chunk)
-        for pid in reply.pending_ids:
+        await self.send_approvals(chat_id, reply.pending_ids, bot)
+
+    async def send_approvals(self, chat_id: int, pending_ids: list[int], bot) -> None:
+        for pid in pending_ids:
             row = self.db.query("SELECT summary FROM pending_actions WHERE id=?", (pid,))[0]
             kb = InlineKeyboardMarkup([[
                 InlineKeyboardButton("✅ Approve", callback_data=f"ok:{pid}"),
@@ -144,6 +149,27 @@ class Bot:
     async def on_briefing(self, update: Update, ctx):
         if await self.guard(update):
             await self.ask_agent(update.effective_chat.id, BRIEFING_PROMPT, ctx.bot, remember=False)
+
+    def talk_url(self) -> str:
+        return f"{self.config.web_url}/talk"
+
+    async def on_talk(self, update: Update, ctx):
+        if not await self.guard(update):
+            return
+        if not self.config.web_url:
+            await update.message.reply_text(
+                "The voice page isn't switched on yet. In Railway: worker → Settings → Networking "
+                "→ Generate Domain (port 8080). Then send /talk again.")
+            return
+        key = web.make_key(self.config.telegram_token, self.config.owner_id)
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎙 Talk to me", web_app=WebAppInfo(self.talk_url()))],
+            [InlineKeyboardButton("🌐 Open in browser", url=f"{self.talk_url()}?k={key}")],
+        ])
+        await update.message.reply_text(
+            "Hands-free mode: tap the microphone once, then just talk. I answer out loud and "
+            "listen again. You'll also find it under the 🎙 button next to the message field.",
+            reply_markup=kb)
 
     async def on_review(self, update: Update, ctx):
         if await self.guard(update):
@@ -259,8 +285,25 @@ class Bot:
             await self.ask_agent(self.config.owner_id, WEEKLY_REVIEW_PROMPT, ctx.bot)
 
     # -------------------------------------------------------------- run
+    async def post_init(self, app: Application) -> None:
+        """Runs inside the bot's event loop: start the voice page next to the bot."""
+        self.web = web.WebApp(self)
+        await self.web.start()
+        if self.config.web_url and self.config.owner_id:
+            try:  # the button next to the message field opens the voice page
+                await app.bot.set_chat_menu_button(
+                    chat_id=self.config.owner_id,
+                    menu_button=MenuButtonWebApp("🎙 Talk", WebAppInfo(self.talk_url())))
+            except Exception:
+                log.exception("Could not set the voice page menu button")
+
+    async def post_shutdown(self, app: Application) -> None:
+        await self.web.stop()
+
     def run(self):
-        app = Application.builder().token(self.config.telegram_token).build()
+        app = (Application.builder().token(self.config.telegram_token)
+               .post_init(self.post_init).post_shutdown(self.post_shutdown).build())
+        self.app = app
         app.add_handler(CommandHandler(["start", "help"], self.on_start))
         app.add_handler(CommandHandler("reset", self.on_reset))
         app.add_handler(CommandHandler("skills", self.on_skills))
@@ -270,6 +313,7 @@ class Bot:
         app.add_handler(CommandHandler("connect_strava", self.on_connect_strava))
         app.add_handler(CommandHandler("review", self.on_review))
         app.add_handler(CommandHandler("voice", self.on_voice_setting))
+        app.add_handler(CommandHandler("talk", self.on_talk))
         app.add_handler(CallbackQueryHandler(self.on_button))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_text))
         app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, self.on_voice))

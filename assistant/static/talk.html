@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Prata med Ragnar</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #17212b);
+    --text: var(--tg-theme-text-color, #f5f5f5);
+    --hint: var(--tg-theme-hint-color, #8a98a8);
+    --accent: var(--tg-theme-button-color, #5288c1);
+    --card: var(--tg-theme-secondary-bg-color, #232e3c);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { min-height: 100%; display: flex; flex-direction: column; align-items: center;
+    justify-content: space-between; padding: 24px 16px 32px; gap: 20px; }
+  #log { width: 100%; max-width: 32rem; display: flex; flex-direction: column; gap: 10px;
+    overflow-y: auto; flex: 1; }
+  .msg { padding: 10px 14px; border-radius: 16px; line-height: 1.45; max-width: 88%;
+    white-space: pre-wrap; word-wrap: break-word; }
+  .you { align-self: flex-end; background: var(--accent); color: #fff; }
+  .ragnar { align-self: flex-start; background: var(--card); }
+  .note { align-self: center; color: var(--hint); font-size: 0.9rem; text-align: center; }
+  #status { color: var(--hint); font-size: 1.05rem; min-height: 1.5em; text-align: center; }
+  #btn { width: 140px; height: 140px; border-radius: 50%; border: none; background: var(--accent);
+    color: #fff; font-size: 3rem; cursor: pointer; flex-shrink: 0;
+    box-shadow: 0 0 0 0 rgba(82, 136, 193, 0.6); transition: transform 0.15s; }
+  #btn:active { transform: scale(0.95); }
+  #btn.listening { animation: breathe 2.4s ease-in-out infinite; }
+  #btn.hearing { animation: pulse 0.9s ease-out infinite; }
+  #btn.thinking { opacity: 0.6; }
+  #btn.speaking { background: #3fa35b; animation: breathe 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(82,136,193,.7); } 100% { box-shadow: 0 0 0 36px rgba(82,136,193,0); } }
+  @keyframes breathe { 50% { transform: scale(1.06); } }
+  #stop { background: none; border: none; color: var(--hint); font-size: 0.95rem; padding: 8px;
+    visibility: hidden; cursor: pointer; }
+</style>
+</head>
+<body>
+<main>
+  <div id="log"><div class="msg note">Tryck på mikrofonen och prata. Jag lyssnar tills du har pratat klart, svarar högt och lyssnar sedan igen.</div></div>
+  <div id="status">Tryck för att börja</div>
+  <button id="btn" aria-label="Prata">🎙</button>
+  <button id="stop">Avsluta samtalet</button>
+</main>
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+const auth = tg && tg.initData ? { "X-Init-Data": tg.initData }
+  : { "X-Key": new URLSearchParams(location.search).get("k") || "" };
+
+const btn = document.getElementById("btn");
+const stopBtn = document.getElementById("stop");
+const statusEl = document.getElementById("status");
+const logEl = document.getElementById("log");
+
+const SILENCE_MS = 1100;   // this long quiet after speaking = you're done
+const IDLE_MS = 25000;     // restart the recording if nobody speaks for this long
+const MAX_MS = 60000;      // longest single question
+
+let state = "idle", active = false;
+let ctx, stream, analyser, recorder, chunks = [], discard = false, source = null;
+const mimeType = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm", "audio/ogg"]
+  .find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+
+const LABELS = {
+  idle: ["🎙", "Tryck för att börja"],
+  listening: ["👂", "Jag lyssnar… (tryck för att pausa)"],
+  hearing: ["🔴", "Jag hör dig… (tryck för att skicka direkt)"],
+  thinking: ["💭", "Tänker…"],
+  speaking: ["🔊", "Pratar… (tryck för att avbryta)"],
+};
+function setState(s) {
+  state = s;
+  btn.className = s;
+  [btn.textContent, statusEl.textContent] = LABELS[s];
+  stopBtn.style.visibility = active ? "visible" : "hidden";
+}
+function add(cls, text) {
+  const d = document.createElement("div");
+  d.className = "msg " + cls;
+  d.textContent = text;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function startConversation() {
+  try {
+    ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+    await ctx.resume();  // unlocked by this tap, so replies can play on their own later
+    if (!stream) {
+      stream = await navigator.mediaDevices.getUserMedia(
+        { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      ctx.createMediaStreamSource(stream).connect(analyser);
+    }
+  } catch (e) {
+    add("note", "Jag fick inte använda mikrofonen. Tillåt mikrofonen för Telegram i telefonens inställningar och försök igen.");
+    return;
+  }
+  active = true;
+  listen();
+}
+
+function endConversation() {
+  active = false;
+  if (recorder && recorder.state === "recording") { discard = true; recorder.stop(); }
+  if (source) { try { source.stop(); } catch (e) {} source = null; }
+  setState("idle");
+}
+
+function listen() {
+  if (!active) return setState("idle");
+  chunks = []; discard = false;
+  recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
+  recorder.onstop = send;
+  recorder.start();
+  setState("listening");
+  watchVoice();
+}
+
+function watchVoice() {
+  const buf = new Float32Array(analyser.fftSize);
+  const started = performance.now();
+  let noise = 0.005, lastVoice = 0, spoke = false;
+  (function tick() {
+    if (state !== "listening" && state !== "hearing") return;
+    analyser.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (const x of buf) sum += x * x;
+    const level = Math.sqrt(sum / buf.length);
+    const now = performance.now();
+    if (now - started < 500) noise = Math.max(noise, level);  // learn the room's noise first
+    if (level > Math.max(0.02, noise * 2.5)) {
+      lastVoice = now;
+      if (!spoke) { spoke = true; setState("hearing"); }
+    }
+    if (spoke && (now - lastVoice > SILENCE_MS || now - started > MAX_MS)) return recorder.stop();
+    if (!spoke && now - started > IDLE_MS) { discard = true; return recorder.stop(); }
+    requestAnimationFrame(tick);
+  })();
+}
+
+async function send() {
+  if (discard || !chunks.length) return active ? listen() : setState("idle");
+  const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || "audio/webm" });
+  setState("thinking");
+  try {
+    const res = await fetch("api/talk", { method: "POST", headers: { ...auth, "Content-Type": blob.type }, body: blob });
+    const data = await res.json();
+    if (data.heard) add("you", data.heard);
+    if (data.error) { add("note", data.error); if (res.status === 403) return endConversation(); }
+    if (data.reply) add("ragnar", data.reply);
+    if (data.pending) add("note", "Godkänn eller avvisa i Telegram-chatten.");
+    if (data.audio) return play(data.audio);
+  } catch (e) {
+    add("note", "Kunde inte nå Ragnar. Kontrollera uppkopplingen.");
+  }
+  listen();
+}
+
+async function play(b64) {
+  setState("speaking");
+  try {
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const audio = await ctx.decodeAudioData(bytes.buffer);
+    source = ctx.createBufferSource();
+    source.buffer = audio;
+    source.connect(ctx.destination);
+    source.onended = () => { source = null; if (state === "speaking") listen(); };
+    source.start();
+  } catch (e) {
+    add("note", "Kunde inte spela upp svaret.");
+    listen();
+  }
+}
+
+btn.addEventListener("click", () => {
+  if (state === "idle") startConversation();
+  else if (state === "hearing") recorder.stop();          // send right away
+  else if (state === "speaking") { const s = source; source = null; setState("listening"); s && s.stop(); listen(); }
+  else if (state === "listening") endConversation();
+});
+stopBtn.addEventListener("click", endConversation);
+if (!navigator.mediaDevices || !window.MediaRecorder) {
+  add("note", "Den här webbläsaren kan inte spela in ljud. Öppna sidan från Telegram på telefonen.");
+}
+setState("idle");
+</script>
+</body>
+</html>

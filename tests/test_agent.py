@@ -352,3 +352,65 @@ def test_spoken_turn_is_fast(tmp_path):
     normal = client.calls[1]
     assert "output_config" not in normal and "read aloud" not in normal["system"][1]["text"]
     assert fast["system"][0] == normal["system"][0]  # cached part unchanged
+
+
+def _signed_init_data(token, user_id, auth_date=None):
+    import hashlib
+    import hmac
+    import json
+    import time
+    from urllib.parse import urlencode
+    fields = {"auth_date": str(auth_date or int(time.time())), "query_id": "q1",
+              "user": json.dumps({"id": user_id, "first_name": "Fabian"})}
+    check = "\n".join(f"{k}={v}" for k, v in sorted(fields.items()))
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    fields["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    return urlencode(fields)
+
+
+def test_web_auth():
+    from assistant import web
+    good = _signed_init_data("123:abc", 42)
+    assert web.check_init_data(good, "123:abc") == 42
+    assert web.check_init_data(good, "999:other") is None                  # wrong bot
+    assert web.check_init_data(good.replace("42", "43"), "123:abc") is None  # tampered
+    assert web.check_init_data(_signed_init_data("123:abc", 42, auth_date=1), "123:abc") is None  # old
+    key = web.make_key("123:abc", 42)
+    assert web.check_key(key, "123:abc", 42) and not web.check_key(key, "123:abc", 43)
+    assert not web.check_key("1.deadbeef", "123:abc", 42)
+
+
+def test_web_talk(tmp_path, monkeypatch):
+    from aiohttp.test_utils import TestClient, TestServer
+    from assistant import voice, web
+
+    agent, db, client = make(tmp_path, [([text("Du har gym kl 18.")], "end_turn")])
+    agent.config.telegram_token, agent.config.owner_id = "123:abc", 42
+
+    async def fake_transcribe(cfg, audio, filename):
+        assert audio == b"sound" and filename == "talk.webm"
+        return "Vad har jag idag?"
+
+    async def fake_speak(cfg, text, voice=None, style=None, fmt="opus"):
+        assert fmt == "mp3"
+        return b"mp3-bytes"
+
+    monkeypatch.setattr(voice, "transcribe", fake_transcribe)
+    monkeypatch.setattr(voice, "speak", fake_speak)
+    bot = NS(config=agent.config, agent=agent, db=db)
+
+    async def run():
+        async with TestClient(TestServer(web.WebApp(bot).app)) as c:
+            page = await c.get("/talk")
+            assert page.status == 200 and "Prata med Ragnar" in await page.text()
+            denied = await c.post("/api/talk", data=b"sound", headers={"Content-Type": "audio/webm"})
+            assert denied.status == 403
+            ok = await c.post("/api/talk", data=b"sound", headers={
+                "Content-Type": "audio/webm", "X-Init-Data": _signed_init_data("123:abc", 42)})
+            return ok.status, await ok.json()
+
+    status, data = asyncio.run(run())
+    assert status == 200 and data["heard"] == "Vad har jag idag?"
+    assert data["reply"] == "Du har gym kl 18." and data["audio"] == "bXAzLWJ5dGVz"
+    assert "read aloud" in client.calls[0]["system"][1]["text"]  # short spoken answer
+    assert [m["role"] for m in db.history(42, 10)] == ["user", "assistant"]

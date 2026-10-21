@@ -80,6 +80,15 @@ Lets the training coach see runs, rides and other workouts from your watch. Garm
 3. Copy the **Client ID** and **Client Secret** into Railway → Variables as `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`.
 4. Send `/connect_strava` to the bot and follow its instructions (same copy-the-address trick as Google).
 
+### Optional: hands-free voice mode (2 min, free)
+A voice page inside Telegram: tap the microphone once, then just talk. Ragnar notices when you stop,
+answers out loud straight away (no play button) and listens again.
+1. In Railway: **worker → Settings → Networking → Generate Domain**, port `8080`.
+2. Wait for the redeploy, then send `/talk` to the bot, or use the 🎙 button next to the message field.
+3. The first time, allow microphone access for Telegram.
+
+Only your Telegram account can use the page (Telegram signs every request).
+
 ---
 
 ## Using it
@@ -91,6 +100,7 @@ Just chat normally. Useful commands:
 | `/tasks` | Open to-dos |
 | `/connect_google` | (Re)connect Gmail/Calendar/Drive |
 | `/connect_strava` | Connect Strava |
+| `/talk` | Hands-free voice mode |
 | `/voice` | Spoken replies: `auto`, `always` or `off` |
 | `/review` | Weekly training review right now (it also comes automatically on Sundays, 19:00) |
 | `/skills` | What it can do |
