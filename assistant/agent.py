@@ -3,7 +3,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from anthropic import AsyncAnthropic
@@ -13,6 +13,8 @@ from .skills.base import Skill, Tool, ToolContext
 log = logging.getLogger(__name__)
 
 MAX_STEPS = 15  # safety limit on tool calls per message
+TOOL_TURNS = 5  # how many recent turns keep their tool calls + results in the history
+RESULT_CHARS = 1200  # stored length of each tool result
 
 
 @dataclass
@@ -53,6 +55,11 @@ The current date and time is given at the end of these instructions.
 
 Rules:
 - Use your tools to get real information. Never invent emails, events or facts.
+- Only say you checked, found or confirmed something if a tool result in this conversation
+  shows it. If you didn't check, say so, or check now. If you're unsure, check again
+  rather than guess.
+- Earlier user messages start with [when they were sent], added by the system; use it to
+  tell what "today" or "tomorrow" meant back then. Older turns keep only the text.
 - Some actions (sending email, creating/deleting events, etc.) need the user's approval.
   When you call such a tool it is NOT executed yet: the user gets Approve/Reject buttons.
   Tell them briefly what you prepared and that it is waiting for their approval.
@@ -77,16 +84,46 @@ Rules:
     def _all_tools(self) -> list[dict]:
         return [t.to_api() for t in self.tools.values()] + self.server_tools
 
+    def _stamp(self, created_at: str | None) -> str:
+        if not created_at:
+            return ""
+        dt = datetime.fromisoformat(created_at).replace(tzinfo=timezone.utc)
+        return f"[{dt.astimezone(ZoneInfo(self.config.timezone)):%a %d %b %H:%M}] "
+
     def _history_messages(self, chat_id: int) -> list[dict]:
-        """Past text turns, merged so roles alternate (required by the API)."""
+        """Past turns, so roles alternate (required by the API).
+
+        User messages carry when they were sent. The last few turns also replay the
+        tools that were called and (shortened) what they returned, as real tool
+        blocks: the assistant can then see what it actually checked, instead of
+        only its own earlier claims.
+        """
+        rows = self.db.history(chat_id, self.config.history_turns * 3)
+        while rows and rows[0]["role"] != "user":  # never start mid-turn
+            rows.pop(0)
+        tool_rows = [i for i, r in enumerate(rows) if r["role"] == "tools"]
+        detailed = set(tool_rows[-TOOL_TURNS:])
         msgs: list[dict] = []
-        for row in self.db.history(chat_id, self.config.history_turns * 2):
-            if msgs and msgs[-1]["role"] == row["role"]:
-                msgs[-1]["content"] += "\n\n" + row["content"]
+
+        def add_text(role: str, text: str) -> None:
+            if msgs and msgs[-1]["role"] == role and isinstance(msgs[-1]["content"], str):
+                msgs[-1]["content"] += "\n\n" + text
             else:
-                msgs.append({"role": row["role"], "content": row["content"]})
-        while msgs and msgs[0]["role"] != "user":
-            msgs.pop(0)
+                msgs.append({"role": role, "content": text})
+
+        for i, row in enumerate(rows):
+            if row["role"] == "user":
+                add_text("user", self._stamp(row.get("created_at")) + row["content"])
+            elif row["role"] == "assistant":
+                add_text("assistant", row["content"])
+            elif i in detailed:
+                for step in json.loads(row["content"]):
+                    msgs.append({"role": "assistant", "content": [
+                        {"type": "tool_use", "id": c["id"], "name": c["name"], "input": c["input"]}
+                        for c in step]})
+                    msgs.append({"role": "user", "content": [
+                        {"type": "tool_result", "tool_use_id": c["id"], "content": c["result"]}
+                        for c in step]})
         return msgs
 
     # ------------------------------------------------------------------
@@ -103,17 +140,22 @@ Rules:
         return json.dumps(result, ensure_ascii=False, default=str)
 
     async def handle(self, chat_id: int, user_text: str, remember: bool = True,
-                     spoken: bool = False, attachments: list[dict] | None = None) -> AgentReply:
-        """attachments: Claude content blocks (photos, PDFs) sent along with this message."""
-        messages = self._history_messages(chat_id) if remember else []
+                     spoken: bool = False, attachments: list[dict] | None = None,
+                     use_history: bool | None = None, record_as: str | None = None) -> AgentReply:
+        """attachments: Claude content blocks (photos, PDFs) sent along with this message.
+        remember: save this turn; use_history: send earlier turns (default: same as remember);
+        record_as: what to save as the user's message (e.g. a short label for a long prompt)."""
+        use_history = remember if use_history is None else use_history
+        messages = self._history_messages(chat_id) if use_history else []
         prompt = user_text
-        if messages and messages[-1]["role"] == "user":  # merge, roles must alternate
-            prompt = messages.pop()["content"] + "\n\n" + user_text
+        if messages and messages[-1]["role"] == "user" and isinstance(messages[-1]["content"], str):
+            prompt = messages.pop()["content"] + "\n\n" + user_text  # merge, roles must alternate
         content = [*attachments, {"type": "text", "text": prompt}] if attachments else prompt
         messages.append({"role": "user", "content": content})
 
         pending: list[int] = []
         files: list = []
+        steps: list[list[dict]] = []  # tool calls per step, saved with the turn
         final_text = ""
         system = self.system_prompt(spoken)  # build once: must stay identical within a turn
         # Voice: think less and answer shorter, so the spoken reply arrives fast.
@@ -146,7 +188,7 @@ Rules:
                 break
 
             messages.append({"role": "assistant", "content": resp.content})
-            results = []
+            results, calls = [], []
             for block in resp.content:
                 if block.type != "tool_use":
                     continue
@@ -164,14 +206,19 @@ Rules:
                 else:
                     out = await self.run_tool(tool, block.input, chat_id, files)
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
+                short = out if len(out) <= RESULT_CHARS else out[:RESULT_CHARS] + " …[shortened]"
+                calls.append({"id": block.id, "name": block.name, "input": block.input, "result": short})
             messages.append({"role": "user", "content": results})
+            steps.append(calls)
         else:
             final_text = final_text or "Sorry, that took too many steps. Could you break it down?"
 
         final_text = final_text or "Done."
-        if remember:  # history keeps text only; note that something was attached
+        if remember:
             note = f" [attached {len(attachments)} file(s)]" if attachments else ""
-            self.db.add_message(chat_id, "user", user_text + note)
+            self.db.add_message(chat_id, "user", (record_as or user_text) + note)
+            if steps:  # what was actually checked, so later turns can rely on it
+                self.db.add_message(chat_id, "tools", json.dumps(steps, ensure_ascii=False, default=str))
             self.db.add_message(chat_id, "assistant", final_text)
         return AgentReply(final_text, pending, files)
 

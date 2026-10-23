@@ -66,7 +66,7 @@ class DB:
 
     def history(self, chat_id: int, limit: int) -> list[dict]:
         rows = self.query(
-            "SELECT role, content FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT ?",
+            "SELECT role, content, created_at FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT ?",
             (chat_id, limit),
         )
         return list(reversed(rows))

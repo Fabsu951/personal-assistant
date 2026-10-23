@@ -1,5 +1,6 @@
 """Offline tests: a fake Claude drives the agent loop, no API keys needed."""
 import asyncio
+import json
 from datetime import datetime, timedelta
 from types import SimpleNamespace as NS
 
@@ -49,7 +50,7 @@ def test_tool_runs_and_history_saved(tmp_path):
     assert db.query("SELECT title FROM tasks")[0]["title"] == "Renew passport"
     tool_result = client.calls[1]["messages"][-1]["content"][0]
     assert "Task #1 added" in tool_result["content"]
-    assert [m["role"] for m in db.history(1, 10)] == ["user", "assistant"]
+    assert [m["role"] for m in db.history(1, 10)] == ["user", "tools", "assistant"]
     # tools sent to the API include web search + all client tools
     names = [t["name"] for t in client.calls[0]["tools"]]
     assert "web_search" in names and "gmail_send" in names
@@ -555,7 +556,7 @@ def test_photo_attachment(tmp_path):
     img = {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "AAA="}}
     asyncio.run(agent.handle(1, "Översätt", attachments=[img]))
     sent = client.calls[0]["messages"][-1]["content"]
-    assert sent[0] == img and sent[1] == {"type": "text", "text": "hej\n\nÖversätt"}
+    assert sent[0] == img and sent[1]["text"].startswith("[") and sent[1]["text"].endswith("] hej\n\nÖversätt")
     assert db.history(1, 10)[-2]["content"] == "Översätt [attached 1 file(s)]"
 
 
@@ -705,3 +706,68 @@ def test_journal(tmp_path):
     assert t["journal_read"].handler({"query": "tentan"}, ctx)[0]["mood"] == 4
     trend = t["mood_trend"].handler({}, ctx)
     assert trend["average"] == 6.0 and trend["lowest"] == 6.0  # one day, averaged
+
+
+def _roles_alternate(messages):
+    roles = [m["role"] for m in messages]
+    return roles[0] == "user" and all(a != b for a, b in zip(roles, roles[1:]))
+
+
+def test_next_turn_sees_what_was_checked(tmp_path):
+    agent, db, client = make(tmp_path, [
+        ([tool_use("t1", "reminder_list", {})], "tool_use"),
+        ([text("You have one reminder: book lung check-up.")], "end_turn"),
+        ([text("Yes, that's the one I found.")], "end_turn"),
+    ])
+    db.execute("INSERT INTO reminders(chat_id, text, due_at) VALUES(1, 'Book lung check-up', '2099-10-23T10:00:00+08:00')")
+    asyncio.run(agent.handle(1, "what reminders do I have?"))
+    asyncio.run(agent.handle(1, "did you really check?"))
+    msgs = client.calls[2]["messages"]
+    assert _roles_alternate(msgs)
+    call, result = msgs[1]["content"][0], msgs[2]["content"][0]
+    assert call == {"type": "tool_use", "id": "t1", "name": "reminder_list", "input": {}}
+    assert result["tool_use_id"] == "t1" and "Book lung check-up" in result["content"]
+    assert msgs[3] == {"role": "assistant", "content": "You have one reminder: book lung check-up."}
+    assert msgs[0]["content"].startswith("[") and msgs[0]["content"].endswith("] what reminders do I have?")
+    assert "Only say you checked" in client.calls[2]["system"][0]["text"]
+
+
+def test_tool_history_is_bounded(tmp_path):
+    from assistant import agent as agent_mod
+    agent, db, client = make(tmp_path, [])
+    for n in range(agent_mod.TOOL_TURNS + 2):
+        db.add_message(1, "user", f"q{n}")
+        db.add_message(1, "tools", json.dumps([[{"id": f"t{n}", "name": "task_list", "input": {},
+                                                 "result": "x" * 50}]]))
+        db.add_message(1, "assistant", f"a{n}")
+    msgs = agent._history_messages(1)
+    assert _roles_alternate(msgs)
+    ids = [b["id"] for m in msgs if isinstance(m["content"], list) for b in m["content"] if b["type"] == "tool_use"]
+    assert ids == [f"t{n}" for n in range(2, agent_mod.TOOL_TURNS + 2)]  # only the latest turns keep tools
+    db.execute("DELETE FROM messages WHERE content IN ('q0')")  # history now starts at a tools row
+    assert _roles_alternate(agent._history_messages(1))
+
+
+def test_long_results_are_shortened_when_saved(tmp_path):
+    from assistant import agent as agent_mod
+    agent, db, client = make(tmp_path, [
+        ([tool_use("t1", "note_save", {"title": "x", "content": "y"})], "tool_use"),
+        ([text("Saved.")], "end_turn"),
+    ])
+    agent.tools["note_save"].handler = lambda a, c: "z" * 5000
+    asyncio.run(agent.handle(1, "save"))
+    saved = json.loads(db.query("SELECT content FROM messages WHERE role='tools'")[0]["content"])
+    assert len(saved[0][0]["result"]) < agent_mod.RESULT_CHARS + 20 and saved[0][0]["result"].endswith("[shortened]")
+
+
+def test_briefing_is_remembered(tmp_path):
+    agent, db, client = make(tmp_path, [([text("Good morning! Lung check-up at 10:00.")], "end_turn"),
+                                        ([text("You're welcome!")], "end_turn")])
+    db.add_message(1, "user", "old chat")
+    db.add_message(1, "assistant", "old answer")
+    asyncio.run(agent.handle(1, "LONG BRIEFING PROMPT", use_history=False, record_as="(Asked for my morning briefing.)"))
+    assert len(client.calls[0]["messages"]) == 1  # the briefing itself doesn't need old chat
+    asyncio.run(agent.handle(1, "thanks for the briefing"))
+    sent = client.calls[1]["messages"]
+    assert any("Lung check-up at 10:00" in str(m["content"]) for m in sent)
+    assert not any("LONG BRIEFING PROMPT" in str(m["content"]) for m in sent)

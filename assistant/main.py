@@ -33,6 +33,8 @@ BRIEFING_PROMPT = (
     "scannable, then suggest the 1-3 most important things to do today. Skip any part that "
     "has nothing in it or whose account isn't connected."
 )
+BRIEFING_LABEL = "(Asked for my morning briefing.)"
+REVIEW_LABEL = "(Asked for my weekly training review.)"
 
 WEEKLY_REVIEW_PROMPT = (
     "Time for my weekly training review. Compare the last 7 days (workout_history, "
@@ -127,12 +129,13 @@ class Bot:
         return self.db.get("voice_replies", self.config.voice_replies)
 
     async def ask_agent(self, chat_id: int, text: str, bot, remember=True, spoken=False,
-                        attachments=None) -> None:
+                        attachments=None, use_history=None, record_as=None) -> None:
         await bot.send_chat_action(chat_id, ChatAction.TYPING)
         t0 = time.monotonic()
         try:
             reply = await self.agent.handle(chat_id, text, remember=remember, spoken=spoken,
-                                            attachments=attachments)
+                                            attachments=attachments, use_history=use_history,
+                                            record_as=record_as)
         except Exception as e:
             log.exception("Agent error")
             await bot.send_message(chat_id, f"Something went wrong: {e}")
@@ -170,7 +173,8 @@ class Bot:
 
     async def on_briefing(self, update: Update, ctx):
         if await self.guard(update):
-            await self.ask_agent(update.effective_chat.id, BRIEFING_PROMPT, ctx.bot, remember=False)
+            await self.ask_agent(update.effective_chat.id, BRIEFING_PROMPT, ctx.bot,
+                                 use_history=False, record_as=BRIEFING_LABEL)
 
     def talk_url(self) -> str:
         return f"{self.config.web_url}/talk"
@@ -195,7 +199,8 @@ class Bot:
 
     async def on_review(self, update: Update, ctx):
         if await self.guard(update):
-            await self.ask_agent(update.effective_chat.id, WEEKLY_REVIEW_PROMPT, ctx.bot)
+            await self.ask_agent(update.effective_chat.id, WEEKLY_REVIEW_PROMPT, ctx.bot,
+                                 record_as=REVIEW_LABEL)
 
     async def on_connect_strava(self, update: Update, ctx):
         if not await self.guard(update):
@@ -358,11 +363,14 @@ class Bot:
 
     async def job_briefing(self, ctx: ContextTypes.DEFAULT_TYPE):
         if self.config.owner_id:
-            await self.ask_agent(self.config.owner_id, BRIEFING_PROMPT, ctx.bot, remember=False)
+            # saved, so a reply like "thanks" or "move that" knows what the briefing said
+            await self.ask_agent(self.config.owner_id, BRIEFING_PROMPT, ctx.bot,
+                                 use_history=False, record_as=BRIEFING_LABEL)
 
     async def job_weekly_review(self, ctx: ContextTypes.DEFAULT_TYPE):
         if self.config.owner_id:  # remembered, so you can answer "yes, add them"
-            await self.ask_agent(self.config.owner_id, WEEKLY_REVIEW_PROMPT, ctx.bot)
+            await self.ask_agent(self.config.owner_id, WEEKLY_REVIEW_PROMPT, ctx.bot,
+                                 record_as=REVIEW_LABEL)
 
     # -------------------------------------------------------------- run
     async def post_init(self, app: Application) -> None:
