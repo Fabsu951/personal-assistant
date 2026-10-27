@@ -65,7 +65,7 @@ Commands:
 /connect_google – link Gmail, Calendar & Drive
 /briefing – get your daily briefing now
 /review – weekly training review now
-/connect_onedrive – link OneDrive
+/connect_microsoft – link Outlook mail, calendar & OneDrive
 /connect_strava – link Strava (workouts from your watch)
 /tasks – show open tasks
 /skills – what I can do
@@ -311,27 +311,28 @@ class Bot:
                                   "translate it if it's in another language, or log it if it's a receipt.)")
         await self.ask_agent(chat_id, caption, ctx.bot, attachments=[block])
 
-    async def on_connect_onedrive(self, update: Update, ctx):
+    async def on_connect_microsoft(self, update: Update, ctx):
         if not await self.guard(update):
             return
         chat_id = update.effective_chat.id
         try:
             flow = await microsoft.start(self.config)
         except Exception as e:
-            await update.message.reply_text(f"Can't start OneDrive connection: {e}")
+            await update.message.reply_text(f"Can't start Microsoft connection: {e}")
             return
         await update.message.reply_text(
             f"1) Open {flow['verification_uri']}\n2) Enter this code (tap to copy below)\n"
-            "3) Sign in with the Microsoft account that has your OneDrive and accept.\n"
+            "3) Sign in with your Microsoft account (Outlook / Microsoft 365) and accept.\n"
             "I'll tell you here when it's done.")
         await update.message.reply_text(flow["user_code"])
 
         async def finish():
             try:
                 await microsoft.wait_for_login(self.db, self.config, flow)
-                await ctx.bot.send_message(chat_id, "OneDrive connected ✅ Try: 'What's in my OneDrive?'")
+                await ctx.bot.send_message(chat_id, "Microsoft connected ✅ (Outlook mail, calendar, OneDrive). "
+                                                    "Try: 'What's in my Outlook calendar this week?'")
             except Exception as e:
-                await ctx.bot.send_message(chat_id, f"OneDrive connection failed: {e}")
+                await ctx.bot.send_message(chat_id, f"Microsoft connection failed: {e}")
         ctx.application.create_task(finish())
 
     async def on_voice_setting(self, update: Update, ctx):
@@ -402,7 +403,7 @@ class Bot:
         app.add_handler(CommandHandler("review", self.on_review))
         app.add_handler(CommandHandler("voice", self.on_voice_setting))
         app.add_handler(CommandHandler("talk", self.on_talk))
-        app.add_handler(CommandHandler("connect_onedrive", self.on_connect_onedrive))
+        app.add_handler(CommandHandler(["connect_microsoft", "connect_onedrive"], self.on_connect_microsoft))
         app.add_handler(CallbackQueryHandler(self.on_button))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_text))
         app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, self.on_voice))

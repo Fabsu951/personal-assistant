@@ -11,7 +11,7 @@ Your own AI personal assistant that you chat with on Telegram. It can:
 - **Voice messages**: talk instead of typing, and get spoken answers back (needs an OpenAI key, see below)
 - **Travel**: cheapest flights and hotels (Google Flights/Hotels prices), trip plans and budgets
 - **Languages**: translates anything; send a photo of a menu, sign or letter and it translates it
-- **OneDrive**: search and read your Word, Excel, PowerPoint and PDF files (optional)
+- **Outlook / Microsoft 365**: read, draft and send Outlook email, see and book Outlook calendar events (with Teams links), and read OneDrive files (optional)
 - **Studies**: flashcards with spaced repetition, quizzes, explanations and exam study plans
 - **Writing**: reports, essays, letters and CVs, delivered as Word files in the chat
 - **Ideas**: brainstorm partner and an idea bank
@@ -110,17 +110,20 @@ Only your Telegram account can use the page (Telegram signs every request).
 Try: *"Cheapest flight Taipei → Stockholm 10 Dec, back 5 Jan?"* Ragnar finds the prices and gives a
 Google Flights link to book; he never books or pays himself.
 
-### Optional: OneDrive (10 min, free)
-1. Go to **portal.azure.com** and sign in with the Microsoft account that has your OneDrive.
+### Optional: Outlook mail, calendar and OneDrive (10 min, free)
+1. Go to **portal.azure.com** and sign in with your Microsoft account.
    (If it asks you to create a free Azure account or directory first, do that.)
 2. Search for **App registrations** → **New registration**:
    name `Ragnar`, account type **"Accounts in any organizational directory and personal Microsoft
    accounts"**, no redirect URI → **Register**.
 3. Copy the **Application (client) ID** into Railway → Variables as `MS_CLIENT_ID`.
 4. In the app: **Authentication** → **Allow public client flows** → **Yes** → **Save**.
-5. Send `/connect_onedrive` to the bot, open the link, type the code and sign in.
+5. Send `/connect_microsoft` to the bot, open the link, type the code and sign in.
 
-Access is read-only. A school or work OneDrive may need approval from that organisation's IT.
+Ragnar can read and draft Outlook email and read the calendar freely; sending, archiving, booking and
+deleting always wait for your ✅. OneDrive is read-only. A work or school account may need approval
+from that organisation's IT. Connected OneDrive before Outlook support was added? Send
+`/connect_microsoft` once more to allow mail and calendar.
 
 ---
 
@@ -132,7 +135,7 @@ Just chat normally. Useful commands:
 | `/briefing` | Daily summary right now |
 | `/tasks` | Open to-dos |
 | `/connect_google` | (Re)connect Gmail/Calendar/Drive |
-| `/connect_onedrive` | Connect OneDrive |
+| `/connect_microsoft` | Connect Outlook mail, calendar and OneDrive |
 | `/connect_strava` | Connect Strava |
 | `/talk` | Hands-free voice mode |
 | `/voice` | Spoken replies: `auto`, `always` or `off` |

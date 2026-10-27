@@ -502,7 +502,7 @@ def test_onedrive(tmp_path, monkeypatch):
     cfg = agent.config
     cfg.ms_client_id = "app-id"
     ctx = ToolContext(db=db, config=cfg, chat_id=1)
-    assert "connect_onedrive" in str(_raises(lambda: agent.tools["onedrive_search"].handler({"query": "x"}, ctx)))
+    assert "connect_microsoft" in str(_raises(lambda: agent.tools["onedrive_search"].handler({"query": "x"}, ctx)))
 
     # device-code login: pending once, then success
     answers = [httpx.Response(400, json={"error": "authorization_pending"}),
@@ -528,8 +528,8 @@ def test_onedrive(tmp_path, monkeypatch):
     item = {"id": "1", "name": "Avtal.docx", "size": 100, "webUrl": "https://onedrive/x",
             "file": {}, "parentReference": {"path": "/drive/root:/Dokument"}}
 
-    def fake_get(url, params=None, follow_redirects=True, timeout=60, headers=None):
-        assert headers["Authorization"] == "Bearer A1"
+    def fake_get(method, url, params=None, json=None, follow_redirects=True, timeout=60, headers=None):
+        assert method == "GET" and headers["Authorization"] == "Bearer A1"
         if "search(q='hyres''avtal')" in url:
             return httpx.Response(200, json={"value": [item]})
         if url.endswith("/items/1/content"):
@@ -538,7 +538,7 @@ def test_onedrive(tmp_path, monkeypatch):
             return httpx.Response(200, json=item)
         raise AssertionError(url)
 
-    monkeypatch.setattr(microsoft.httpx, "get", fake_get)
+    monkeypatch.setattr(microsoft.httpx, "request", fake_get)
     found = agent.tools["onedrive_search"].handler({"query": "hyres'avtal"}, ctx)
     assert found[0]["name"] == "Avtal.docx" and found[0]["folder"] == "/Dokument"
     read = agent.tools["onedrive_read"].handler({"file_id": "1"}, ctx)
@@ -771,3 +771,131 @@ def test_briefing_is_remembered(tmp_path):
     sent = client.calls[1]["messages"]
     assert any("Lung check-up at 10:00" in str(m["content"]) for m in sent)
     assert not any("LONG BRIEFING PROMPT" in str(m["content"]) for m in sent)
+
+
+class FakeGraph:
+    """Answers Microsoft Graph calls like Outlook would, and records them."""
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, method, url, params=None, json=None, follow_redirects=True, timeout=60, headers=None):
+        import httpx
+        path = url.split("/v1.0", 1)[1]
+        self.calls.append((method, path, params, json, headers))
+        routes = {
+            ("GET", "/me/calendars"): {"value": [{"id": "c1", "name": "Calendar"}, {"id": "c2", "name": "Team"},
+                                                 {"id": "c3", "name": "Broken"}]},
+            ("GET", "/me/calendars/c1/calendarView"): {"value": [
+                {"id": "e1", "subject": "Board meeting", "isAllDay": False,
+                 "start": {"dateTime": "2026-10-28T02:00:00.0000000", "timeZone": "UTC"},
+                 "end": {"dateTime": "2026-10-28T03:00:00.0000000", "timeZone": "UTC"},
+                 "onlineMeeting": {"joinUrl": "https://teams/x"}}]},
+            ("GET", "/me/calendars/c2/calendarView"): {"value": [
+                {"id": "e2", "subject": "Offsite", "isAllDay": True,
+                 "start": {"dateTime": "2026-10-28T00:00:00.0000000", "timeZone": "UTC"},
+                 "end": {"dateTime": "2026-10-29T00:00:00.0000000", "timeZone": "UTC"}}]},
+            ("GET", "/me/messages"): {"value": [{"id": "m1", "subject": "Offert", "isRead": False,
+                                                 "from": {"emailAddress": {"name": "Anna", "address": "anna@x.se"}},
+                                                 "receivedDateTime": "2026-10-27T08:00:00Z", "bodyPreview": "Hej!"}]},
+            ("GET", "/me/messages/m1"): {"id": "m1", "subject": "Offert", "body": {"content": "Hej Maria, ..."},
+                                         "from": {"emailAddress": {"address": "anna@x.se"}}, "toRecipients": []},
+            ("POST", "/me/calendars/c2/events"): {"id": "new", "webLink": "https://outlook/new",
+                                                 "onlineMeeting": {"joinUrl": "https://teams/new"}},
+        }
+        if path == "/me/calendars/c3/calendarView":
+            return httpx.Response(500, text="boom")
+        if method in ("POST", "DELETE") and (method, path) not in routes:
+            return httpx.Response(202)  # sendMail, reply, move, delete answer with no body
+        return httpx.Response(200, json=routes[(method, path)])
+
+
+def _outlook(tmp_path, monkeypatch):
+    import time
+    from assistant import microsoft
+    from assistant.skills.base import ToolContext
+    agent, db, client = make(tmp_path, [])
+    agent.config.timezone = "Asia/Taipei"
+    db.set(microsoft.TOKEN_KEY, {"access_token": "A", "refresh_token": "R", "expires_at": time.time() + 3600,
+                                 "scope": microsoft.SCOPES})
+    graph = FakeGraph()
+    monkeypatch.setattr(microsoft.httpx, "request", graph)
+    return agent, ToolContext(db=db, config=agent.config, chat_id=1), graph
+
+
+def test_outlook_calendar(tmp_path, monkeypatch):
+    agent, ctx, graph = _outlook(tmp_path, monkeypatch)
+    t = agent.tools
+    out = t["outlook_calendar_list"].handler({"start": "2026-10-28", "end": "2026-10-29"}, ctx)
+    assert [e.get("title") for e in out[:2]] == ["Offsite", "Board meeting"]
+    board = out[1]
+    assert board["start"] == "2026-10-28T10:00:00+08:00" and board["calendar"] == "Calendar"  # UTC -> Taipei
+    assert board["teams_link"] == "https://teams/x" and out[0]["start"] == "2026-10-28" and out[0]["all_day"]
+    assert "Broken" in out[2]["note"]
+    view = [c for c in graph.calls if c[1].endswith("c1/calendarView")][0][2]
+    assert view["startDateTime"] == "2026-10-28T00:00:00+08:00"
+    msg = t["outlook_create_event"].handler({"title": "Kundmöte", "start": "2026-10-29T14:00",
+                                             "attendees": "anna@x.se", "teams_meeting": True,
+                                             "calendar": "team"}, ctx)
+    assert "https://teams/new" in msg
+    body = graph.calls[-1][3]
+    assert body["start"] == {"dateTime": "2026-10-29T06:00:00", "timeZone": "UTC"}  # 14:00 Taipei
+    assert body["end"]["dateTime"] == "2026-10-29T07:00:00" and body["onlineMeetingProvider"] == "teamsForBusiness"
+    assert body["attendees"] == [{"emailAddress": {"address": "anna@x.se"}, "type": "required"}]
+    t["outlook_delete_event"].handler({"event_id": "e1"}, ctx)
+    assert graph.calls[-1][:2] == ("DELETE", "/me/events/e1")
+
+
+def test_outlook_mail(tmp_path, monkeypatch):
+    agent, ctx, graph = _outlook(tmp_path, monkeypatch)
+    t = agent.tools
+    found = t["outlook_search"].handler({"query": "offert"}, ctx)
+    assert found[0] == {"id": "m1", "from": "Anna <anna@x.se>", "subject": "Offert",
+                        "date": "2026-10-27T08:00:00Z", "unread": True, "snippet": "Hej!"}
+    assert graph.calls[-1][2]["$search"] == '"offert"'
+    read = t["outlook_read"].handler({"message_id": "m1"}, ctx)
+    assert read["body"].startswith("Hej Maria") and "text" in graph.calls[-1][4]["Prefer"]
+    t["outlook_send"].handler({"to": "a@b.se, c@d.se", "subject": "Hej", "body": "Text"}, ctx)
+    method, path, _, body, _ = graph.calls[-1]
+    assert (method, path) == ("POST", "/me/sendMail") and len(body["message"]["toRecipients"]) == 2
+    t["outlook_send"].handler({"reply_to_message_id": "m1", "body": "Tack!"}, ctx)
+    assert graph.calls[-1][1] == "/me/messages/m1/reply" and graph.calls[-1][3] == {"comment": "Tack!"}
+    t["outlook_archive"].handler({"message_ids": ["m1"]}, ctx)
+    assert graph.calls[-1][1:4:2] == ("/me/messages/m1/move", {"destinationId": "archive"})
+    for name in ("outlook_send", "outlook_archive", "outlook_create_event", "outlook_delete_event"):
+        assert agent.tools[name].needs_approval
+    assert not agent.tools["outlook_create_draft"].needs_approval
+
+
+def test_outlook_send_waits_for_approval(tmp_path, monkeypatch):
+    agent, db, client = make(tmp_path, [
+        ([tool_use("t1", "outlook_send", {"to": "anna@x.se", "subject": "Offert", "body": "Hej"})], "tool_use"),
+        ([text("Klart att godkänna.")], "end_turn"),
+    ])
+    sent = []
+    agent.tools["outlook_send"].handler = lambda a, c: sent.append(a) or "Email sent."
+    reply = asyncio.run(agent.handle(1, "mejla anna"))
+    assert reply.pending_ids and not sent  # nothing goes out before ✅
+    assert "Outlook" in db.query("SELECT summary FROM pending_actions")[0]["summary"]
+    asyncio.run(agent.resolve_action(reply.pending_ids[0], approve=True))
+    assert sent and sent[0]["to"] == "anna@x.se"
+
+
+def test_microsoft_old_login_refreshes_with_old_scope(tmp_path, monkeypatch):
+    import httpx
+    from assistant import microsoft
+    agent, db, _ = make(tmp_path, [])
+    agent.config.ms_client_id = "app"
+    db.set(microsoft.TOKEN_KEY, {"access_token": "old", "refresh_token": "R", "expires_at": 0})  # pre-Outlook login
+    seen = {}
+
+    def fake_post(url, timeout, data):
+        seen.update(data)
+        return httpx.Response(200, json={"access_token": "new", "expires_in": 3600, "scope": "Files.Read User.Read"})
+
+    monkeypatch.setattr(microsoft.httpx, "post", fake_post)
+    assert microsoft._access_token(db, agent.config) == "new"
+    assert seen["scope"] == microsoft.OLD_SCOPES  # never asks for more than was granted
+    saved = db.get(microsoft.TOKEN_KEY)
+    assert saved["refresh_token"] == "R" and "offline_access" in saved["scope"]
+    monkeypatch.setattr(microsoft.httpx, "request", lambda *a, **k: httpx.Response(403, text="denied"))
+    assert "connect_microsoft" in str(_raises(lambda: microsoft.graph(db, agent.config, "/me/messages")))

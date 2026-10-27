@@ -17,6 +17,7 @@ from .ideas import IdeasSkill
 from .journal import JournalSkill
 from .nutrition import NutritionSkill
 from .onedrive import OneDriveSkill
+from .outlook import OutlookSkill
 from .people import PeopleSkill
 from .research import ResearchSkill
 from .study import StudySkill
@@ -34,6 +35,7 @@ AVAILABLE = {
     "voice": VoiceSkill,
     "travel": TravelSkill,
     "onedrive": OneDriveSkill,
+    "outlook": OutlookSkill,
     "study": StudySkill,
     "writing": WritingSkill,
     "ideas": IdeasSkill,
