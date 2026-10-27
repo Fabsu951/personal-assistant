@@ -47,6 +47,14 @@ class Config:
     # Microsoft (Outlook mail + calendar, OneDrive) - connect with /connect_microsoft
     ms_client_id: str = field(default_factory=lambda: _env("MS_CLIENT_ID", ""))
     ms_tenant: str = field(default_factory=lambda: _env("MS_TENANT", "common"))
+    # Microsoft Teams bot (Azure Bot resource, single tenant). Empty = Teams off.
+    teams_app_id: str = field(default_factory=lambda: _env("TEAMS_APP_ID", ""))
+    teams_app_password: str = field(default_factory=lambda: _env("TEAMS_APP_PASSWORD", ""))
+    teams_tenant_id: str = field(default_factory=lambda: _env("TEAMS_TENANT_ID", ""))
+    teams_owner_id: str = field(default_factory=lambda: _env("TEAMS_OWNER_ID", ""))
+    # Where briefings, reminders and reviews go: auto (Telegram if set up, else Teams),
+    # telegram, teams or both.
+    notify_channel: str = field(default_factory=lambda: _env("NOTIFY_CHANNEL", "auto"))
     # Voice messages are transcribed with OpenAI's speech-to-text API. Empty = voice off.
     openai_api_key: str = field(default_factory=lambda: _env("OPENAI_API_KEY", ""))
     transcribe_model: str = field(
@@ -77,6 +85,8 @@ class Config:
         out = []
         if not self.anthropic_api_key:
             out.append("ANTHROPIC_API_KEY")
-        if not self.telegram_token:
-            out.append("TELEGRAM_BOT_TOKEN")
+        if not self.telegram_token and not self.teams_app_id:
+            out.append("TELEGRAM_BOT_TOKEN or TEAMS_APP_ID")
+        if self.teams_app_id and not self.teams_app_password:
+            out.append("TEAMS_APP_PASSWORD")
         return out

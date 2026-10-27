@@ -1,17 +1,19 @@
-"""Hands-free voice page (a Telegram Mini App), served next to the bot.
+"""The web server next to the bot: the hands-free voice page, the Teams endpoint,
+private download links for documents, and the Teams app package.
 
 Telegram opens /talk inside the app. The page listens, sends what you said to
 /api/talk, plays Ragnar's spoken reply straight away and starts listening again.
-Every request is checked: only the owner's Telegram account gets an answer.
+Every request is checked: only the owner gets an answer.
 """
 import base64
 import hashlib
 import hmac
 import json
 import logging
+import secrets
 import time
 from pathlib import Path
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, quote
 
 from aiohttp import web
 
@@ -20,6 +22,8 @@ from . import voice
 log = logging.getLogger(__name__)
 
 PAGE = Path(__file__).with_name("static") / "talk.html"
+PRIVACY = Path(__file__).parent.parent / "docs" / "privacy.html"
+FILE_DAYS = 7  # download links for documents stop working after this
 MAX_AUDIO = 15 * 1024 * 1024
 KEY_DAYS = 30
 EXTENSIONS = {"webm": "webm", "mp4": "mp4", "ogg": "ogg", "mpeg": "mp3", "wav": "wav"}
@@ -63,24 +67,67 @@ class WebApp:
         self.config = bot.config
         self.app = web.Application(client_max_size=MAX_AUDIO)
         self.app.add_routes([web.get("/", self.page), web.get("/talk", self.page),
-                             web.post("/api/talk", self.talk)])
+                             web.post("/api/talk", self.talk),
+                             web.post("/api/messages", self.teams_message),
+                             web.get("/files/{token}/{name}", self.download),
+                             web.get("/teams/app.zip", self.teams_package),
+                             web.get("/privacy", self.privacy)])
         self.runner: web.AppRunner | None = None
 
     def authorized(self, request) -> bool:
-        owner, token = self.config.owner_id, self.config.telegram_token
-        if not owner:
-            return False
-        if init_data := request.headers.get("X-Init-Data"):
-            return check_init_data(init_data, token) == owner
-        return check_key(request.headers.get("X-Key", ""), token, owner)
+        if init_data := request.headers.get("X-Init-Data"):  # opened inside Telegram
+            owner = self.config.owner_id
+            return bool(owner) and check_init_data(init_data, self.config.telegram_token) == owner
+        secret = self.bot.link_secret()  # a signed link, e.g. from /talk in Teams or a browser
+        return bool(secret) and check_key(request.headers.get("X-Key", ""), secret, self.bot.home_chat)
+
+    # ------------------------------------------------------- documents
+    def file_link(self, name: str, data: bytes) -> str:
+        """A private, expiring link to a document (Teams bots can't attach files directly)."""
+        token = secrets.token_urlsafe(24)
+        self.bot.db.execute("DELETE FROM kv WHERE key LIKE 'file:%' AND json_extract(value, '$.expires') < ?",
+                            (time.time(),))  # old links
+        self.bot.db.set(f"file:{token}", {"name": name, "data": base64.b64encode(data).decode(),
+                                          "expires": time.time() + FILE_DAYS * 86400})
+        return f"{self.config.web_url}/files/{token}/{quote(name)}"
+
+    async def download(self, request):
+        key = f"file:{request.match_info['token']}"
+        f = self.bot.db.get(key)
+        if not f or f["expires"] < time.time():
+            return web.Response(status=404, text="This link has expired.")
+        return web.Response(body=base64.b64decode(f["data"]), headers={
+            "Content-Type": "application/octet-stream",
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(f['name'])}"})
+
+    # ----------------------------------------------------------- Teams
+    async def teams_message(self, request):
+        if not self.bot.teams:
+            return web.Response(status=404)
+        return await self.bot.teams.handle(request)
+
+    async def teams_package(self, request):
+        from . import teams
+        try:
+            data = teams.app_package(self.config)
+        except RuntimeError as e:
+            return web.Response(status=404, text=str(e))
+        return web.Response(body=data, headers={
+            "Content-Type": "application/zip",
+            "Content-Disposition": f"attachment; filename={self.config.assistant_name}-teams.zip"})
+
+    async def privacy(self, request):
+        if PRIVACY.exists():
+            return web.FileResponse(PRIVACY)
+        return web.Response(text="This assistant is private to its owner. No data is shared or sold.")
 
     async def page(self, request):
         return web.FileResponse(PAGE, headers={"Cache-Control": "no-cache"})
 
     async def talk(self, request):
         if not self.authorized(request):
-            return web.json_response({"error": "Not allowed. Open this page from Telegram."},
-                                     status=403)
+            return web.json_response({"error": "Not allowed. Open this page from Telegram or "
+                                               "the /talk link."}, status=403)
         audio = await request.read()
         if not audio:
             return web.json_response({"error": "No audio received."}, status=400)
@@ -94,7 +141,7 @@ class WebApp:
         if not heard:
             return web.json_response({"heard": "", "reply": "", "audio": None})
         t1 = time.monotonic()
-        chat_id = self.config.owner_id  # a private chat's id is the user's id
+        chat_id = self.bot.home_chat  # the same memory as the chat apps
         try:
             reply = await self.bot.agent.handle(chat_id, heard, spoken=True)
         except Exception as e:
@@ -102,10 +149,11 @@ class WebApp:
             return web.json_response({"heard": heard, "error": f"Something went wrong: {e}"},
                                      status=500)
         t2 = time.monotonic()
-        if reply.files:  # documents arrive in the Telegram chat
-            await self.bot.send_files(chat_id, reply.files, self.bot.app.bot)
-        if reply.pending_ids:  # approve/reject buttons live in the Telegram chat
-            await self.bot.send_approvals(chat_id, reply.pending_ids, self.bot.app.bot)
+        if reply.files or reply.pending_ids:  # documents and approval buttons go to the chat app
+            try:
+                await self.bot.deliver(reply, text=False)
+            except Exception:
+                log.exception("Could not send files/approvals to the chat app")
         audio_b64 = None
         try:
             mp3 = await voice.speak(self.config, reply.text, voice=self.bot.db.get("tts_voice"),

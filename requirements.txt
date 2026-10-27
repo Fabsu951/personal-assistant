@@ -10,3 +10,4 @@ aiohttp
 pypdf
 openpyxl
 python-docx
+PyJWT[crypto]

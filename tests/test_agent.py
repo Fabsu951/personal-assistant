@@ -398,7 +398,10 @@ def test_web_talk(tmp_path, monkeypatch):
 
     monkeypatch.setattr(voice, "transcribe", fake_transcribe)
     monkeypatch.setattr(voice, "speak", fake_speak)
-    bot = NS(config=agent.config, agent=agent, db=db)
+    async def deliver(reply, text=True):
+        pass
+    bot = NS(config=agent.config, agent=agent, db=db, home_chat=42, link_secret=lambda: "123:abc",
+             deliver=deliver)
 
     async def run():
         async with TestClient(TestServer(web.WebApp(bot).app)) as c:
@@ -899,3 +902,182 @@ def test_microsoft_old_login_refreshes_with_old_scope(tmp_path, monkeypatch):
     assert saved["refresh_token"] == "R" and "offline_access" in saved["scope"]
     monkeypatch.setattr(microsoft.httpx, "request", lambda *a, **k: httpx.Response(403, text="denied"))
     assert "connect_microsoft" in str(_raises(lambda: microsoft.graph(db, agent.config, "/me/messages")))
+
+
+# ------------------------------------------------------------------ Teams
+def _rsa():
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+def _bf_token(key, aud="app-id", iss="https://api.botframework.com", service="https://smba.example/", exp=3600):
+    import time
+    import jwt
+    return jwt.encode({"iss": iss, "aud": aud, "exp": int(time.time()) + exp, "nbf": int(time.time()) - 10,
+                       "serviceurl": service}, key, algorithm="RS256")
+
+
+def test_teams_token_check():
+    from assistant import teams
+    key, other = _rsa(), _rsa()
+    keys = NS(get_signing_key_from_jwt=lambda t: NS(key=key.public_key()))
+    ok = "Bearer " + _bf_token(key)
+    assert teams.check_token(ok, "app-id", "https://smba.example/", keys)
+    assert not teams.check_token(ok, "other-app", "https://smba.example/", keys)           # not for us
+    assert not teams.check_token(ok, "app-id", "https://evil.example/", keys)              # other service
+    assert not teams.check_token("Bearer " + _bf_token(other), "app-id", "https://smba.example/", keys)  # forged
+    assert not teams.check_token("Bearer " + _bf_token(key, iss="https://evil"), "app-id", "https://smba.example/", keys)
+    assert not teams.check_token("Bearer " + _bf_token(key, exp=-3600), "app-id", "https://smba.example/", keys)
+    assert not teams.check_token("", "app-id", "https://smba.example/", keys)
+
+
+class FakeTeamsHttp:
+    """Stands in for Microsoft: hands out bot tokens and records what the bot posts."""
+    posts: list = []
+
+    def __init__(self, **kw):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        pass
+
+    async def post(self, url, data=None, json=None, headers=None):
+        import httpx
+        if "login.microsoftonline.com" in url:
+            assert data["scope"] == "https://api.botframework.com/.default" and data["client_secret"] == "secret"
+            return httpx.Response(200, json={"access_token": "BOT", "expires_in": 3600})
+        assert headers["Authorization"] == "Bearer BOT"
+        FakeTeamsHttp.posts.append((url, json))
+        return httpx.Response(201, json={"id": "1"})
+
+
+def _teams_bot(tmp_path, monkeypatch, script, owner="aad-owner"):
+    from assistant import main, teams, web
+    cfg = Config()
+    cfg.data_dir, cfg.telegram_token, cfg.owner_id = tmp_path, "", 0
+    cfg.teams_app_id, cfg.teams_app_password, cfg.teams_tenant_id = "app-id", "secret", "tenant-1"
+    cfg.teams_owner_id, cfg.web_url = owner, "https://ragnar.example"
+    bot = main.Bot(cfg)
+    bot.agent.client = FakeClient(script)
+    bot.teams, bot.web = teams.Teams(bot), web.WebApp(bot)
+    FakeTeamsHttp.posts = []
+    monkeypatch.setattr(teams.httpx, "AsyncClient", FakeTeamsHttp)
+    return bot
+
+
+def _activity(text="hej", user="aad-owner", tenant="tenant-1", value=None):
+    a = {"type": "message", "text": text, "serviceUrl": "https://smba.example/",
+         "conversation": {"id": "conv-1"}, "from": {"id": "29:x", "aadObjectId": user},
+         "channelData": {"tenant": {"id": tenant}}}
+    if value:
+        a["value"] = value
+    return a
+
+
+def _texts():
+    return [j.get("text") for _, j in FakeTeamsHttp.posts if j.get("type") == "message" and "text" in j]
+
+
+def test_teams_only_the_owner(tmp_path, monkeypatch):
+    bot = _teams_bot(tmp_path, monkeypatch, [], owner="")
+    asyncio.run(bot.teams.process(_activity(user="aad-123")))
+    assert "aad-123" in _texts()[0] and "TEAMS_OWNER_ID" in _texts()[0]
+    bot = _teams_bot(tmp_path / "b", monkeypatch, [])
+    asyncio.run(bot.teams.process(_activity(user="someone-else")))
+    assert _texts() == ["Sorry, I'm a private assistant."]
+    FakeTeamsHttp.posts = []
+    asyncio.run(bot.teams.process(_activity(tenant="other-org")))
+    assert FakeTeamsHttp.posts == []  # another organisation gets nothing at all
+
+
+def test_teams_chat_and_approval(tmp_path, monkeypatch):
+    email = {"to": "anna@x.se", "subject": "Offert", "body": "Hej"}
+    bot = _teams_bot(tmp_path, monkeypatch, [
+        ([text("Hej Fabian!")], "end_turn"),
+        ([tool_use("t1", "gmail_send", email)], "tool_use"),
+        ([text("Väntar på ditt godkännande.")], "end_turn"),
+    ])
+    asyncio.run(bot.teams.process(_activity("<p>hej</p>")))
+    url, sent = FakeTeamsHttp.posts[-1]
+    assert url == "https://smba.example/v3/conversations/conv-1/activities" and sent["text"] == "Hej Fabian!"
+    assert bot.db.get("teams_ref") == {"serviceUrl": "https://smba.example/", "conversation": "conv-1"}
+    assert bot.agent.client.calls[0]["messages"][-1]["content"] == "hej"  # HTML stripped
+    asyncio.run(bot.teams.process(_activity("mejla anna")))
+    card = FakeTeamsHttp.posts[-1][1]["attachments"][0]
+    assert card["contentType"] == "application/vnd.microsoft.card.adaptive"
+    approve = card["content"]["actions"][0]["data"]
+    assert approve["ragnar"] == "ok" and "anna@x.se" in card["content"]["body"][1]["text"]
+    sent_mail = []
+    bot.agent.tools["gmail_send"].handler = lambda a, c: sent_mail.append(a) or "Email sent."
+    asyncio.run(bot.teams.process(_activity("", value=approve)))  # the ✅ button
+    assert sent_mail and _texts()[-1].startswith("Done")
+
+
+def test_teams_commands_and_files(tmp_path, monkeypatch):
+    from aiohttp.test_utils import TestClient, TestServer
+    bot = _teams_bot(tmp_path, monkeypatch, [
+        ([text("Morgon! Inget i kalendern.")], "end_turn"),
+        ([tool_use("t1", "document_create", {"title": "Rapport", "content": "Text"})], "tool_use"),
+        ([text("Här är rapporten.")], "end_turn"),
+    ])
+    asyncio.run(bot.teams.process(_activity("skills")))
+    assert _texts()[-1].startswith("Skills switched on")
+    asyncio.run(bot.teams.process(_activity("/briefing")))
+    assert "morning briefing" in bot.agent.client.calls[0]["messages"][-1]["content"]
+    assert bot.db.history(1, 10)[0]["content"] == "(Asked for my morning briefing.)"
+    asyncio.run(bot.teams.process(_activity("skriv en rapport")))
+    link = _texts()[-1]
+    assert "Rapport.docx" in link and "https://ragnar.example/files/" in link
+    path = link[link.index("/files/"):link.index(")")].replace("https://ragnar.example", "")
+
+    async def fetch():
+        async with TestClient(TestServer(bot.web.app)) as c:
+            got = await c.get(path)
+            denied = await c.post("/api/messages", json=_activity())  # no Microsoft signature
+            zipped = await c.get("/teams/app.zip")
+            return got.status, await got.read(), denied.status, zipped.status, await zipped.read()
+    status, body, denied, zstatus, zipdata = asyncio.run(fetch())
+    assert status == 200 and body[:2] == b"PK"  # a real .docx
+    assert denied == 401 and zstatus == 200 and zipdata[:2] == b"PK"
+
+
+def test_teams_app_package():
+    import io
+    import zipfile
+    from assistant import teams
+    cfg = Config()
+    cfg.teams_app_id, cfg.web_url, cfg.assistant_name = "app-id", "https://ragnar.example", "Ragnar"
+    z = zipfile.ZipFile(io.BytesIO(teams.app_package(cfg)))
+    manifest = json.loads(z.read("manifest.json"))
+    assert manifest["id"] == manifest["bots"][0]["botId"] == "app-id"
+    assert manifest["validDomains"] == ["ragnar.example"] and manifest["bots"][0]["scopes"] == ["personal"]
+    for name, size in (("color.png", 192), ("outline.png", 32)):
+        png = z.read(name)
+        assert png[:8] == b"\x89PNG\r\n\x1a\n" and int.from_bytes(png[16:20], "big") == size
+
+
+def test_notify_targets(tmp_path, monkeypatch):
+    bot = _teams_bot(tmp_path, monkeypatch, [])
+    assert bot.targets() == []  # nobody has written from Teams yet
+    bot.db.set("teams_ref", {"serviceUrl": "https://smba.example/", "conversation": "conv-1"})
+    assert bot.targets() == ["teams"]
+    bot.app, bot.config.owner_id = NS(bot=None), 5
+    assert bot.targets() == ["telegram"]  # auto prefers Telegram when both exist
+    bot.config.notify_channel = "both"
+    assert bot.targets() == ["telegram", "teams"]
+    bot.config.notify_channel = "teams"
+    assert bot.targets() == ["teams"]
+    assert bot._hhmm("7:30") == "07:30" and bot._hhmm("off") is None
+
+
+def test_teams_reminder_is_delivered(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+    bot = _teams_bot(tmp_path, monkeypatch, [])
+    bot.db.set("teams_ref", {"serviceUrl": "https://smba.example/", "conversation": "conv-1"})
+    past = (datetime.now().astimezone() - timedelta(minutes=1)).isoformat()
+    bot.db.execute("INSERT INTO reminders(chat_id, text, due_at) VALUES(1,'ring mamma',?)", (past,))
+    asyncio.run(bot.job_reminders())
+    assert _texts() == ["⏰ Reminder: ring mamma"]

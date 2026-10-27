@@ -11,6 +11,7 @@ Your own AI personal assistant that you chat with on Telegram. It can:
 - **Voice messages**: talk instead of typing, and get spoken answers back (needs an OpenAI key, see below)
 - **Travel**: cheapest flights and hotels (Google Flights/Hotels prices), trip plans and budgets
 - **Languages**: translates anything; send a photo of a menu, sign or letter and it translates it
+- **Microsoft Teams**: chat with the assistant in Teams instead of (or as well as) Telegram, with approval cards (optional)
 - **Outlook / Microsoft 365**: read, draft and send Outlook email, see and book Outlook calendar events (with Teams links), and read OneDrive files (optional)
 - **Studies**: flashcards with spaced repetition, quizzes, explanations and exam study plans
 - **Writing**: reports, essays, letters and CVs, delivered as Word files in the chat
@@ -124,6 +125,25 @@ Ragnar can read and draft Outlook email and read the calendar freely; sending, a
 deleting always wait for your ✅. OneDrive is read-only. A work or school account may need approval
 from that organisation's IT. Connected OneDrive before Outlook support was added? Send
 `/connect_microsoft` once more to allow mail and calendar.
+
+### Optional: Microsoft Teams (20 min, free)
+Lets the assistant live in Teams. Telegram becomes optional: leave `TELEGRAM_BOT_TOKEN` out for a
+Teams-only assistant. Needs the public domain from the voice-mode step (Generate Domain, port 8080).
+1. **portal.azure.com → Create a resource → Azure Bot.** Pricing tier **Free (F0)**, type of app
+   **Single Tenant**, "Create new Microsoft App ID" → Create.
+2. In the bot: **Configuration** → Messaging endpoint `https://<your-domain>/api/messages` → Apply.
+   Copy **Microsoft App ID** and **App Tenant ID**.
+3. **Manage Password** (next to the App ID) → **New client secret** → copy its **Value** (shown once).
+4. **Channels → Microsoft Teams** → accept → Apply.
+5. Railway → Variables: `TEAMS_APP_ID`, `TEAMS_APP_PASSWORD` (the secret's value), `TEAMS_TENANT_ID`.
+6. Download `https://<your-domain>/teams/app.zip`. In Teams: **Apps → Manage your apps → Upload an
+   app → Upload a custom app** (if that's blocked, the company's Teams admin uploads it).
+7. Open the app in Teams and write "hej". It replies with your Teams ID: add it as `TEAMS_OWNER_ID`.
+
+In Teams, type commands with or without `/`: `briefing`, `skills`, `connect_microsoft`, `talk`…
+Approvals arrive as cards with ✅/❌. Word files arrive as private download links (valid 7 days).
+Briefings and reminders go to Telegram if it's set up, otherwise Teams; `NOTIFY_CHANNEL=teams` or
+`both` changes that. The client secret expires (at most after 2 years): renew it in Azure in time.
 
 ---
 

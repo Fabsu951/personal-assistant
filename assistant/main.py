@@ -1,7 +1,9 @@
-"""Telegram front-end. Start with:  python -m assistant.main"""
+"""Telegram (and Teams) front-end. Start with:  python -m assistant.main"""
+import asyncio
 import base64
 import logging
 import time
+from datetime import datetime
 from datetime import time as dtime
 from zoneinfo import ZoneInfo
 
@@ -11,7 +13,7 @@ from telegram.constants import ChatAction
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
                           MessageHandler, filters)
 
-from . import google_auth, microsoft, strava, voice, web
+from . import google_auth, microsoft, strava, teams, voice, web
 from .agent import Agent
 from .config import Config
 from .db import DB
@@ -89,6 +91,11 @@ class Bot:
         self.db = DB(config.data_dir / "assistant.db")
         self.skills = load_skills(config.enabled_skills, self.db, config)
         self.agent = Agent(config, self.db, self.skills)
+        self.app = None    # Telegram application, when Telegram is set up
+        self.teams = None  # Teams front-end, when Teams is set up
+        self.web = None
+        # One memory for the owner, whichever app they write from.
+        self.home_chat = config.owner_id or 1
 
     # ------------------------------------------------------------ helpers
     def allowed(self, update: Update) -> bool:
@@ -124,6 +131,134 @@ class Bot:
             ]])
             await bot.send_message(chat_id, f"Needs your approval (#{pid}):\n\n{row['summary']}"[:4000],
                                    reply_markup=kb)
+
+    # ------------------------------------------------ shared by all apps
+    def link_secret(self) -> str:
+        return self.config.telegram_token or self.config.teams_app_password
+
+    def targets(self) -> list[str]:
+        """Where briefings, reminders and reviews go."""
+        tg = bool(self.app and self.config.owner_id)
+        tm = bool(self.teams and self.db.get(teams.REF_KEY))
+        mode = self.config.notify_channel.lower()
+        if mode == "both":
+            return [n for n, ok in (("telegram", tg), ("teams", tm)) if ok]
+        if mode in ("telegram", "teams"):
+            return [mode] if {"telegram": tg, "teams": tm}[mode] else []
+        return ["telegram"] if tg else ["teams"] if tm else []
+
+    async def notify(self, text: str) -> None:
+        for target in self.targets():
+            if target == "telegram":
+                await self.app.bot.send_message(self.config.owner_id, text[:4000])
+            else:
+                await self.teams.send_text(text)
+
+    async def deliver(self, reply, text: bool = True) -> None:
+        """Send an agent reply (or just its files and approvals) to the owner's apps."""
+        for target in self.targets():
+            if target == "telegram":
+                if text:
+                    await self.send_reply(self.config.owner_id, reply, self.app.bot)
+                else:
+                    await self.send_files(self.config.owner_id, reply.files, self.app.bot)
+                    await self.send_approvals(self.config.owner_id, reply.pending_ids, self.app.bot)
+            elif text:
+                await self.teams.send_reply(reply)
+            else:
+                await self.teams.send_reply(type(reply)("", reply.pending_ids, reply.files))
+
+    def finish_login(self, chat_id: int, text: str) -> str | None:
+        """A pasted http://localhost address finishes a Google or Strava login."""
+        text = text.strip()
+        if not text.startswith("http://localhost"):
+            return None
+        if strava.is_strava_redirect(text):
+            try:
+                strava.finish(self.db, self.config, text)
+                return "Strava connected ✅ Try: 'What did I train this week?'"
+            except Exception as e:
+                return f"That didn't work: {e}\nTry /connect_strava again."
+        if google_auth.is_waiting(chat_id):
+            try:
+                google_auth.finish(self.db, chat_id, text)
+                return "Google connected ✅ Try: 'What's on my calendar today?'"
+            except Exception as e:
+                return f"That didn't work: {e}\nTry /connect_google again."
+        return None
+
+    def google_text(self, chat_id: int) -> str:
+        try:
+            url = google_auth.start(self.config, chat_id)
+        except Exception as e:
+            return f"Can't start Google connection: {e}"
+        return ("1) Open this link and allow access:\n" + url +
+                "\n\n2) Google may warn the app is unverified – click 'Advanced' → 'Go to … (unsafe)'. "
+                "That's fine: it's your own app.\n"
+                "3) You'll end on a page that says it can't be reached. That's expected! "
+                "Copy the FULL address from the browser bar (starts with http://localhost) "
+                "and paste it here.")
+
+    def strava_text(self) -> str:
+        try:
+            url = strava.start(self.config)
+        except Exception as e:
+            return f"Can't start Strava connection: {e}"
+        return ("1) Open this link and click 'Authorize':\n" + url +
+                "\n\n2) You'll end on a page that says it can't be reached. That's expected! "
+                "Copy the FULL address from the browser bar (starts with http://localhost) "
+                "and paste it here.")
+
+    async def microsoft_text(self, send) -> str:
+        """Starts the code login; `send` posts the result to the same app when it's done."""
+        try:
+            flow = await microsoft.start(self.config)
+        except Exception as e:
+            return f"Can't start Microsoft connection: {e}"
+
+        async def finish():
+            try:
+                await microsoft.wait_for_login(self.db, self.config, flow)
+                await send("Microsoft connected ✅ (Outlook mail, calendar, OneDrive). "
+                           "Try: 'What's in my Outlook calendar this week?'")
+            except Exception as e:
+                await send(f"Microsoft connection failed: {e}")
+        asyncio.get_running_loop().create_task(finish())
+        return (f"1) Open {flow['verification_uri']}\n2) Enter this code: {flow['user_code']}\n"
+                "3) Sign in with your Microsoft account (Outlook / Microsoft 365) and accept.\n"
+                "I'll tell you here when it's done.")
+
+    def prompt_for(self, text: str):
+        """Commands that are answered by the assistant: (prompt, saved as, use history)."""
+        cmd = text.split()[0].lstrip("/").lower() if text.strip() else ""
+        return {"briefing": (BRIEFING_PROMPT, BRIEFING_LABEL, False),
+                "review": (WEEKLY_REVIEW_PROMPT, REVIEW_LABEL, None),
+                "tasks": ("Show my open tasks.", None, None)}.get(cmd)
+
+    async def command(self, text: str, send) -> str | None:
+        """Commands typed in Teams (with or without '/'). None = not a command."""
+        if (done := self.finish_login(self.home_chat, text)) is not None:
+            return done
+        cmd = text.split()[0].lstrip("/").lower() if text.strip() else ""
+        if cmd in ("help", "start"):
+            return HELP
+        if cmd == "reset":
+            self.db.clear_history(self.home_chat)
+            return "Conversation memory cleared."
+        if cmd == "skills":
+            return "Skills switched on:\n" + "\n".join(f"• {s.name}: {s.description}" for s in self.skills)
+        if cmd == "connect_google":
+            return self.google_text(self.home_chat)
+        if cmd == "connect_strava":
+            return self.strava_text()
+        if cmd in ("connect_microsoft", "connect_onedrive"):
+            return await self.microsoft_text(send)
+        if cmd == "talk":
+            if not self.config.web_url:
+                return "The voice page needs a public domain first (Railway → Settings → Networking)."
+            return (f"Hands-free voice page: {self.talk_url()}?k={web.make_key(self.link_secret(), self.home_chat)}"
+                    "\nOpen it, tap the microphone once and talk.")
+        return None
 
     def voice_mode(self) -> str:
         return self.db.get("voice_replies", self.config.voice_replies)
@@ -187,7 +322,7 @@ class Bot:
                 "The voice page isn't switched on yet. In Railway: worker → Settings → Networking "
                 "→ Generate Domain (port 8080). Then send /talk again.")
             return
-        key = web.make_key(self.config.telegram_token, self.config.owner_id)
+        key = web.make_key(self.link_secret(), self.home_chat)
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🎙 Talk to me", web_app=WebAppInfo(self.talk_url()))],
             [InlineKeyboardButton("🌐 Open in browser", url=f"{self.talk_url()}?k={key}")],
@@ -203,53 +338,20 @@ class Bot:
                                  record_as=REVIEW_LABEL)
 
     async def on_connect_strava(self, update: Update, ctx):
-        if not await self.guard(update):
-            return
-        try:
-            url = strava.start(self.config)
-        except Exception as e:
-            await update.message.reply_text(f"Can't start Strava connection: {e}")
-            return
-        await update.message.reply_text(
-            "1) Open this link and click 'Authorize':\n" + url +
-            "\n\n2) You'll end on a page that says it can't be reached. That's expected! "
-            "Copy the FULL address from the browser bar (starts with http://localhost) "
-            "and paste it here.")
+        if await self.guard(update):
+            await update.message.reply_text(self.strava_text())
 
     async def on_connect_google(self, update: Update, ctx):
-        if not await self.guard(update):
-            return
-        try:
-            url = google_auth.start(self.config, update.effective_chat.id)
-        except Exception as e:
-            await update.message.reply_text(f"Can't start Google connection: {e}")
-            return
-        await update.message.reply_text(
-            "1) Open this link and allow access:\n" + url +
-            "\n\n2) Google may warn the app is unverified – click 'Advanced' → 'Go to … (unsafe)'. "
-            "That's fine: it's your own app.\n"
-            "3) You'll end on a page that says it can't be reached. That's expected! "
-            "Copy the FULL address from the browser bar (starts with http://localhost) "
-            "and paste it here.")
+        if await self.guard(update):
+            await update.message.reply_text(self.google_text(update.effective_chat.id))
 
     async def on_text(self, update: Update, ctx):
         if not await self.guard(update):
             return
         chat_id = update.effective_chat.id
         text = update.message.text or ""
-        if text.strip().startswith("http://localhost") and strava.is_strava_redirect(text):
-            try:
-                strava.finish(self.db, self.config, text)
-                await update.message.reply_text("Strava connected ✅ Try: 'What did I train this week?'")
-            except Exception as e:
-                await update.message.reply_text(f"That didn't work: {e}\nTry /connect_strava again.")
-            return
-        if google_auth.is_waiting(chat_id) and text.strip().startswith("http://localhost"):
-            try:
-                google_auth.finish(self.db, chat_id, text)
-                await update.message.reply_text("Google connected ✅ Try: 'What's on my calendar today?'")
-            except Exception as e:
-                await update.message.reply_text(f"That didn't work: {e}\nTry /connect_google again.")
+        if (done := self.finish_login(chat_id, text)) is not None:
+            await update.message.reply_text(done)
             return
         await self.ask_agent(chat_id, text, ctx.bot)
 
@@ -315,25 +417,10 @@ class Bot:
         if not await self.guard(update):
             return
         chat_id = update.effective_chat.id
-        try:
-            flow = await microsoft.start(self.config)
-        except Exception as e:
-            await update.message.reply_text(f"Can't start Microsoft connection: {e}")
-            return
-        await update.message.reply_text(
-            f"1) Open {flow['verification_uri']}\n2) Enter this code (tap to copy below)\n"
-            "3) Sign in with your Microsoft account (Outlook / Microsoft 365) and accept.\n"
-            "I'll tell you here when it's done.")
-        await update.message.reply_text(flow["user_code"])
 
-        async def finish():
-            try:
-                await microsoft.wait_for_login(self.db, self.config, flow)
-                await ctx.bot.send_message(chat_id, "Microsoft connected ✅ (Outlook mail, calendar, OneDrive). "
-                                                    "Try: 'What's in my Outlook calendar this week?'")
-            except Exception as e:
-                await ctx.bot.send_message(chat_id, f"Microsoft connection failed: {e}")
-        ctx.application.create_task(finish())
+        async def send(text):
+            await ctx.bot.send_message(chat_id, text)
+        await update.message.reply_text(await self.microsoft_text(send))
 
     async def on_voice_setting(self, update: Update, ctx):
         if not await self.guard(update):
@@ -358,26 +445,63 @@ class Bot:
         await q.message.reply_text(result[:4000])
 
     # ------------------------------------------------------------- jobs
-    async def job_reminders(self, ctx: ContextTypes.DEFAULT_TYPE):
+    async def run_scheduled(self, prompt: str, label: str, use_history: bool | None = None) -> None:
+        if not self.targets():
+            return
+        try:  # saved, so a reply like "thanks" or "move that" knows what it said
+            reply = await self.agent.handle(self.home_chat, prompt, use_history=use_history, record_as=label)
+        except Exception:
+            log.exception("Scheduled %s failed", label)
+            return
+        await self.deliver(reply)
+
+    async def job_reminders(self, ctx=None):
         for r in due_reminders(self.db):
-            await ctx.bot.send_message(r["chat_id"] or self.config.owner_id, f"⏰ Reminder: {r['text']}")
+            await self.notify(f"⏰ Reminder: {r['text']}")
 
-    async def job_briefing(self, ctx: ContextTypes.DEFAULT_TYPE):
-        if self.config.owner_id:
-            # saved, so a reply like "thanks" or "move that" knows what the briefing said
-            await self.ask_agent(self.config.owner_id, BRIEFING_PROMPT, ctx.bot,
-                                 use_history=False, record_as=BRIEFING_LABEL)
+    async def job_briefing(self, ctx=None):
+        await self.run_scheduled(BRIEFING_PROMPT, BRIEFING_LABEL, use_history=False)
 
-    async def job_weekly_review(self, ctx: ContextTypes.DEFAULT_TYPE):
-        if self.config.owner_id:  # remembered, so you can answer "yes, add them"
-            await self.ask_agent(self.config.owner_id, WEEKLY_REVIEW_PROMPT, ctx.bot,
-                                 record_as=REVIEW_LABEL)
+    async def job_weekly_review(self, ctx=None):
+        await self.run_scheduled(WEEKLY_REVIEW_PROMPT, REVIEW_LABEL)
+
+    def _hhmm(self, value: str) -> str | None:
+        if value.lower() == "off":
+            return None
+        hh, mm = map(int, value.split(":"))
+        return f"{hh:02d}:{mm:02d}"
+
+    async def scheduler(self) -> None:
+        """Reminders, briefing and weekly review when Telegram's job queue isn't running."""
+        tz, done = ZoneInfo(self.config.timezone), set()
+        briefing = self._hhmm(self.config.briefing_time)
+        review = self._hhmm(self.config.weekly_review_time) if "fitness" in self.config.enabled_skills else None
+        while True:
+            try:
+                await self.job_reminders()
+                now = datetime.now(tz)
+                hm, day = now.strftime("%H:%M"), now.date()
+                if hm == briefing and ("briefing", day) not in done:
+                    done.add(("briefing", day))
+                    await self.job_briefing()
+                if hm == review and now.weekday() == 6 and ("review", day) not in done:
+                    done.add(("review", day))
+                    await self.job_weekly_review()
+            except Exception:
+                log.exception("Scheduled job failed")
+            await asyncio.sleep(30)
 
     # -------------------------------------------------------------- run
-    async def post_init(self, app: Application) -> None:
-        """Runs inside the bot's event loop: start the voice page next to the bot."""
+    async def start_services(self) -> None:
+        """The web server (voice page, Teams, file links) runs next to the bot."""
+        if self.config.teams_app_id:
+            self.teams = teams.Teams(self)
         self.web = web.WebApp(self)
         await self.web.start()
+
+    async def post_init(self, app: Application) -> None:
+        """Runs inside the Telegram bot's event loop."""
+        await self.start_services()
         if self.config.web_url and self.config.owner_id:
             try:  # the button next to the message field opens the voice page
                 await app.bot.set_chat_menu_button(
@@ -387,9 +511,21 @@ class Bot:
                 log.exception("Could not set the voice page menu button")
 
     async def post_shutdown(self, app: Application) -> None:
-        await self.web.stop()
+        if self.web:  # not started if Telegram couldn't be reached at start-up
+            await self.web.stop()
+
+    async def run_without_telegram(self) -> None:
+        await self.start_services()
+        log.info("Assistant running (Teams only) with skills: %s", ", ".join(s.name for s in self.skills))
+        try:
+            await self.scheduler()
+        finally:
+            await self.web.stop()
 
     def run(self):
+        if not self.config.telegram_token:
+            asyncio.run(self.run_without_telegram())
+            return
         app = (Application.builder().token(self.config.telegram_token)
                .post_init(self.post_init).post_shutdown(self.post_shutdown).build())
         self.app = app
@@ -410,12 +546,12 @@ class Bot:
         app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, self.on_file))
 
         app.job_queue.run_repeating(self.job_reminders, interval=30, first=10)
-        if self.config.briefing_time.lower() != "off":
-            hh, mm = map(int, self.config.briefing_time.split(":"))
+        if briefing := self._hhmm(self.config.briefing_time):
+            hh, mm = map(int, briefing.split(":"))
             app.job_queue.run_daily(self.job_briefing,
                                     time=dtime(hh, mm, tzinfo=ZoneInfo(self.config.timezone)))
-        if "fitness" in self.config.enabled_skills and self.config.weekly_review_time.lower() != "off":
-            hh, mm = map(int, self.config.weekly_review_time.split(":"))
+        if "fitness" in self.config.enabled_skills and (review := self._hhmm(self.config.weekly_review_time)):
+            hh, mm = map(int, review.split(":"))
             app.job_queue.run_daily(self.job_weekly_review, days=(0,),  # 0 = Sunday
                                     time=dtime(hh, mm, tzinfo=ZoneInfo(self.config.timezone)))
         log.info("Assistant running with skills: %s", ", ".join(s.name for s in self.skills))
