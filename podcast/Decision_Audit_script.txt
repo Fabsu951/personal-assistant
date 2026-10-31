@@ -1,0 +1,185 @@
+## ep1 | Episode 1: The decision lens
+M: Welcome to Decision Audit, the study podcast for the Data-Driven Decision Science midterm. I'm Maya.
+L: And I'm Leo. Over four short episodes we'll walk through everything you need for the exam: weeks one to four, plus chapter three on regression.
+M: This first episode is the foundation. The decision lens from week one, and bias and variance from week two.
+L: Before we start, what kind of exam is this?
+M: It's the week nine midterm, an individual decision audit. Closed book, zero coding. It tests diagnosis, interpretation, trade-offs and recommendation. And the instructor's high-score standard is one sentence worth memorising: can you defend the costs, assumptions, risks and trade-offs of the action?
+L: So it's not about calculating fast.
+M: No. Every answer should end in a decision you can defend, backed by a number, with clear limits on what you claim.
+L: Okay. Week one. Where does it start?
+M: With the core proposition. Model output is evidence. Decisions require values, costs, actions and accountability. From that come the four rules you should be able to recite. One: prediction is evidence, not action. Two: accuracy is not utility. Three: actions can change the data-generating process. Four: the decision maker owns the loss function.
+L: Let's make that concrete.
+M: Think of three different questions. Prediction asks what Y will be, for example, this customer has an eighteen percent default risk. Inference asks how X and Y are related, for example, how income is related to default. And decision asks what we should do now. At eighteen percent, do we approve, reject, or send to manual review?
+L: And the same eighteen percent can lead to different actions.
+M: Exactly, depending on costs, regulation and strategy. The course writes this as a formula: the best action is the one that maximises expected utility given what we know about X. The model estimates Y. The decision maker has to define the actions and the utility.
+L: The umbrella example was my favourite.
+M: Thirty percent chance of rain. On a casual walk, skip the umbrella. If you're carrying documents that can't get wet, take it. The probability didn't change. The loss function did.
+L: And the fraud version?
+M: A transaction has a twenty percent fraud probability. Missing a fraud costs a thousand dollars. Blocking a legitimate customer costs fifty. If you let it through, the expected cost is point two times a thousand, so two hundred. If you block it, it's point eight times fifty, so forty. You block, even though twenty percent is well below fifty percent. Point five is not a natural threshold.
+L: Which is why the cold open, ninety-two percent accuracy, would you deploy, has the answer: need more information.
+M: Right. We need the error costs and the action context.
+L: Next idea: observing versus intervening.
+M: Observing is the probability of Y given X. Customers who received discounts repurchase more. Intervening is the probability of Y if we actively set X. If we give a discount, will repurchases rise? Those are different questions. Three misconceptions follow. Feature importance is not a policy lever. Correlation is not cause; customers with problems simply contact support more. And actions change the environment, so after deployment the new data no longer come from the same process.
+L: That leads to feedback, reflexivity and externality. People mix these up.
+M: Feedback is when system output loops back into input. A recommendation gets a click, the click becomes training data, and the next recommendation changes. It can be purely technical. Reflexivity is when people respond to the prediction itself. If a navigation app tells eighty percent of drivers that route B is faster, route B is no longer faster. Externality is an effect on others that isn't in your objective. Your shortcut saves you three minutes, but moves noise and traffic into a residential street.
+L: And the evidence from routing apps?
+M: Arora and colleagues ran experiments in ten U.S. cities on about one hundred congested road segments for six months. Speed on treated segments rose about two percent, and travel time improved about point seven percent. So a navigation app isn't just predicting traffic. It's an intervention that becomes part of the traffic's data-generating process. Cornacchia and colleagues showed that as adoption rises, route diversity falls and traffic concentrates. The decision question becomes: optimise individual travel time, or network welfare?
+L: And Braess's paradox?
+M: A specific result. Adding a road can make everyone slower under selfish routing. Individual optimisation is not system optimisation. But don't call every traffic jam Braess.
+L: Two more week one cases. Zillow and Hsinchu.
+M: Zillow Offers used price forecasts to actually buy homes. The market shifted, they wrote down about three hundred and four million dollars in one quarter and closed the business. The lesson: forecast error times action exposure becomes balance sheet risk. And Hsinchu: during a rainstorm, a two kilometre ride showed a fare of over twenty-five thousand Taiwan dollars. It was a display bug, so it's not evidence about surge pricing. It's a lesson about guardrails: a plausible range check, a price cap, an anomaly trigger, and a fallback to manual review.
+L: Good. Week two. Bias and variance.
+M: Start with the equation: Y equals f of X plus epsilon. The model's job is to estimate f. The error splits into a reducible part, which better data and methods can shrink, and an irreducible part, epsilon, which stays even if we knew the true f.
+L: And the famous decomposition.
+M: Expected test error equals variance plus bias squared plus irreducible error. Bias is a systematic blind spot: the model is too simple and always misses in the same direction. Variance is instability: train on a different sample and the model changes a lot.
+L: And flexibility moves them in opposite directions.
+M: Yes. More flexibility, lower bias, higher variance. Training error always falls as flexibility rises. Test error forms a U shape. Choosing the bottom of that U is the bias-variance trade-off.
+L: K nearest neighbours makes it visible.
+M: Small K is flexible. K equals one memorises every training point, so training error is zero, but variance is high and it overfits. K equals one hundred is smooth: high bias, low variance, it underfits. Something in between, like K equals ten in the textbook figure, sits near the best test error.
+L: Can you give the numbers from the lender sandbox? I think those will show up.
+M: K equals one: training error zero, validation error fifteen point three percent. K equals five: eight point five and eleven point three. K equals twenty-five: nine point seven and nine point one, with the best validation balanced accuracy, point seven two. K equals one hundred: ten point five and ten point zero. So you choose K equals twenty-five on validation, not K equals one on training.
+L: And the test set?
+M: It stays untouched until the end. Validation chooses, test confirms once.
+L: A few more week two terms.
+M: The curse of dimensionality: with many features, your nearest neighbours are far away, so a ten percent neighbourhood is no longer local. Parametric models like linear regression assume a form; they're almost never exactly right but are often a good, interpretable approximation. Non-parametric models assume no form, need much more data, and can overfit to zero training error. And the Bayes classifier picks the most likely class and gives the lowest possible error, but we can't use it because the true probabilities are unknown.
+L: Last one: the model choice activity.
+M: Three credit models. A has ninety-two percent accuracy but low stability, low explainability, and high monitoring effort. B has ninety percent with high stability and explainability and low effort. C sits in the middle at ninety-one. There's no automatic answer, but a strong answer often picks B or C and asks: what do the errors cost, what does regulation require for explainability, and is two points of accuracy worth it? Always compare against a baseline. Complexity has to earn its keep out of sample.
+L: That's episode one. Next time: the data audit, which is probably the heart of the exam.
+M: See you there.
+
+## ep2 | Episode 2: The data audit
+L: Welcome back to Decision Audit. Episode two, the data-to-decision audit from week three.
+M: The key sentence of the week: a model can have excellent test performance and still lead to bad decisions.
+L: Why?
+M: Because statistical generalisation is not real-world generalisation. The test set may differ from the people we will actually serve. So before deployment, we ask five questions.
+L: Let's go through them with their cases.
+M: One, representativeness. Who is in the data, and who is missing? The case is Gender Shades. Face analysis test sets were about eighty percent lighter-skinned. On a balanced test, error reached thirty-four point seven percent for darker-skinned women, versus point eight percent for lighter-skinned men. One average hides the subgroups.
+L: Two.
+M: Selection. How did past decisions decide what we can see? The case is bail. You only see whether someone returns to court if they were released. Same structure in lending and hiring.
+L: Three.
+M: Leakage. Would we know this field at prediction time? The case is the Epic sepsis model. An input, antibiotic orders, reflects that clinicians already suspected sepsis. An independent study found an AUC of point six three, against the vendor's point seven six to point eight three, and sixty-seven percent of sepsis cases missed.
+L: Four.
+M: Label quality. Does the label match the outcome we care about? The case is the Optum health risk algorithm. It used health cost as a stand-in for health need. At the same score, Black patients were sicker. Only seventeen point seven percent of those flagged were Black, versus forty-six point five percent if unbiased.
+L: And five.
+M: Deployment fit. Will real use look like the way we tested? The case is Zillow again: a model built for a stable market met a fast-changing one.
+L: And for each one we pick a response.
+M: Fix, Learn, or Limit. Fix means change the process: rebuild features, redefine the label, recalibrate. Learn means generate better evidence: a small capped pilot, an experiment, a new validation cohort. Limit means narrow the decision: use the model only where it has evidence, roll out in stages, with a stop rule and rollback.
+L: Default pairings?
+M: Representativeness: Limit plus Learn. Selection: Learn. Leakage: Fix. Label quality: Fix. Deployment fit: Limit.
+L: Now the lender sandbox. Set the scene.
+M: A fictional lender predicts twelve-month default at the time of application. Historically it approved only established customers with a credit score of six hundred forty or more. Now it wants to use the model for all applicants next quarter, including first-time customers.
+L: The numbers.
+M: The register has six thousand past applicants. The raw file of recorded loans has three thousand two hundred forty-one, including forty duplicates, so the modelling file has three thousand two hundred one. Default rate about twelve point four percent. Split sixty, twenty, twenty into train, validation and test. The test set has six hundred forty-one loans, eighty of them defaults.
+L: And the baseline trap.
+M: Predict no default for everyone and you get eighty-seven point five percent accuracy. It finds zero of the eighty defaults, and its balanced accuracy is fifty percent. K N N with K equals twenty-five gets ninety-one point three percent accuracy and finds forty of eighty, a balanced accuracy of seventy-three point six percent, with sixteen false alarms. Better, but it still misses half the defaults.
+L: Balanced accuracy is the average of recall on each class?
+M: Yes. Forty over eighty is point five. Five hundred forty-five over five hundred sixty-one is about point nine seven. Average: point seven three six.
+L: Then the leakage demo.
+M: Add collection flag, a field created after the outcome, and balanced accuracy jumps from seventy-four point seven to one hundred percent. A perfect score means leakage, not excellence. Leakage is about timing: application, then decision, then outcome. Only use what existed at application.
+L: And the big one, gate three.
+M: First-time customers are thirty point nine percent of the register, forty-five point five percent of next quarter, and zero percent of the modelling file. The test set therefore says nothing about them. And removing the segment column doesn't fix that. The evidence is still missing.
+L: Sampling error versus selection bias.
+M: Sampling error is chance. More rows reduce it. Selection bias means who gets in is linked to what we measure. More rows do not fix it. As the slide says, more rows do not bring back missing people. And train, validation and test all inherit the same selection process.
+L: The six thirty to six thirty-nine band question.
+M: The lender approves at six forty and above, so nobody below has a repayment record. Four options. A: approve the whole band. That creates evidence but with uncapped risk. B: keep rejecting and train a more complex model. That creates no new evidence at all. C: approve a small, capped, reviewed sample and track repayment. That creates new evidence with bounded risk, so it's the best answer, a Learn response. D: reject inference, estimating outcomes from similar accepted borrowers. That's estimated, not observed, and needs stated assumptions. It's the fallback if no experiment is allowed.
+L: Label quality in the sandbox?
+M: The simulation hides that twenty percent of real defaults were recorded as no default. So on the test set the recorded default rate is twelve point five percent, but the true rate is fifteen point one. And remember: a historical approval is an earlier decision, not an outcome.
+L: Missing values?
+M: Three mechanisms. Missing completely at random, like an upload failure. Missing at random, like an online form that omits income more often for new customers. And missing not at random, like people with very high debt avoiding reporting it. In the sandbox, new customers lack income about thirty percent of the time versus eight percent for established ones. So if you drop every row with missing income, you remove new customers disproportionately. Median imputation makes the software run, but it doesn't recover the true income.
+L: And a clean report is not a deployment certificate.
+M: Exactly. Which brings us to auditing the AI auditor. An AI report says data quality ninety-six out of a hundred, no major issues. An AI memo says deploy to all next-quarter applicants, risk low. What can't it know? Why first-time customers are missing. Whether labels are complete. Whether every feature existed at application time. And the scope, all applicants, goes far beyond the evidence, with no costs, no owner and no stop rule.
+L: There was also a real dataset.
+M: UCI bank marketing. Call duration predicts the outcome with an AUC of point eight two, but it's leakage, because you don't know how long a call lasts before you dial. And p days equals nine nine nine means never contacted, not nine hundred ninety-nine days. Feed that straight into a distance-based model and it distorts everything.
+L: Now, how do we write the answer?
+M: Use the four-step audit statement. Observation: the modelling file contains zero percent first-time customers. Mechanism: the approval policy excluded that segment. Implication: the test does not evaluate that segment. Next evidence: an outcome evaluation for the proposed population. Start with something anyone can check, and don't turn a plausible story into a fact.
+L: And the recommendation itself?
+M: Six parts. Decision and scope: deploy, don't deploy, or deploy with conditions, and for whom. Evidence: one model result against a baseline, plus two data facts. The evidence gap: who the test doesn't cover. Judgment: what you claim and what you refuse to claim. Action: one concrete Monday morning step with an owner. And feedback: how the action changes future data, with a learning plan or stop rule.
+L: And never just say monitor carefully.
+M: Never. A condition needs a metric, an owner and a trigger. For example: if the sixty-day delinquency rate among pilot loans exceeds a set level, the head of credit pauses the pilot. And don't cite simulation oracle numbers in the memo. Real lenders never see them.
+L: That's the audit. Next episode, the numbers: regression and logistic regression.
+
+## ep3 | Episode 3: Regression and logistic regression
+M: Welcome back. Episode three. We're doing chapter three regression, and the first half of week four: logistic regression and the confusion matrix.
+L: Start with the advertising data.
+M: Two hundred markets, with sales and budgets for TV, radio and newspaper. Sales on TV alone gives a slope of about point zero four seven five and an R squared of point six one. So each extra thousand dollars of TV is associated with about forty-seven more units sold.
+L: Associated with. Not causes.
+M: Always. The data are observational. In the multiple regression, TV is point zero four six, radio is point one eight eight five, and newspaper is minus point zero zero one with a p value of point eight six. R squared is about point nine.
+L: But newspaper is significant on its own.
+M: Because newspaper spending is correlated with radio, about point three five. Alone, newspaper borrows radio's effect. Once radio is in the model, newspaper adds nothing. That's confounding, or omitted variable bias.
+L: And the interpretation sentence for radio?
+M: Holding TV and newspaper fixed, an extra thousand dollars on radio is associated with about one hundred eighty-nine more units sold.
+L: Then the interaction model.
+M: Add TV times radio. The interaction coefficient is positive, about point zero zero one one, and the fit improves to an R squared around point nine seven. It means synergy: the effect of TV grows with the radio budget. Other chapter three tools: dummy variables for categories, with one baseline category, and polynomial terms. For miles per gallon on horsepower, adding horsepower squared lifts R squared from about point six one to point six nine, and the residual plot of the linear model shows a U pattern, which tells you the form is wrong.
+L: The sandbox had four traps.
+M: Trap one, data snooping. Test forty pure noise variables at alpha point zero five, and the chance at least one looks significant is one minus point nine five to the fortieth, about eighty-seven percent. On fresh data, it's significant only about five percent of the time. So select on one half, test on the other.
+L: Trap two.
+M: R squared inflation. R squared can only go up when you add variables, even pure noise. Adjusted R squared charges for each extra variable and stays near zero for noise.
+L: Trap three.
+M: Multicollinearity. If two predictors are highly correlated, the standard errors blow up, coefficients can flip sign, and individual t tests look insignificant while the overall F test is still significant. The two coefficients swing against each other, but their sum stays stable. Measure it with the variance inflation factor, one over one minus R squared of that predictor on the others. Below five is fine, above ten is serious. In the credit data, rating and limit both have a V I F around one hundred sixty. Age is about one.
+L: Trap four.
+M: Leverage and influence. Leverage is an unusual X value. An outlier is an unusual Y given X. Influence is when one point moves the line. A high-leverage point that sits on the line is harmless. The same X far off the line pulls the whole slope. Rules of thumb: leverage above two times p plus one over n, studentised residual beyond three, Cook's distance above one.
+L: And the allocation explorer, the decision case.
+M: You have one hundred thousand dollars to split between TV and radio. The additive model says put it all in radio, predicting twenty-one point seven. But the largest radio budget in the data is forty-nine point six thousand, and there are zero similar markets for one hundred thousand in radio. It's extrapolation. The interaction model prefers fifty-fifty, about eleven point nine, which breaks even at about nineteen dollars of profit per unit. The right wording: fifty-fifty is the best listed choice under the model, a candidate plan. The data are observational, so test the split in a few markets before committing one hundred thousand.
+L: Now logistic regression. Why not just linear regression for a yes or no?
+M: A straight line can predict below zero or above one, and coding several classes as one, two, three invents an order. Logistic regression passes a linear score z through the S curve: p equals e to the z over one plus e to the z. The log odds are linear in X. A coefficient is the change in log odds for a one unit change in X, and e to the coefficient is the odds ratio.
+L: The default data.
+M: Ten thousand customers, three hundred thirty-three defaults, about three point three percent. Balance alone: intercept minus ten point six five, slope point zero zero five five. Each extra hundred dollars of balance adds point five five to the log odds, which multiplies the odds by about one point seven three. At a balance of fifteen hundred, z is minus two point four, so the probability is about eight point three percent. At two thousand, it's about fifty-eight point six percent.
+L: Reading the output table.
+M: The z statistic is the coefficient divided by its standard error. The ninety-five percent confidence interval is the coefficient plus or minus one point nine six standard errors. If it includes zero, it's not significant. For income: point zero zero three plus or minus one point nine six times point zero zero eight two, from about minus point zero one three to plus point zero one nine. That includes zero, so income is not significant. Pseudo R squared is one minus the model log likelihood over the null log likelihood, about point four five for balance alone.
+L: Now the sign flip. I bet this is on the exam.
+M: Student alone has a coefficient of plus point four zero five. Students look riskier: four point three percent default versus two point nine. With balance in the model, student becomes minus point six four seven, an odds ratio of about point five two. Why? Students carry higher balances on average, nine hundred eighty-eight dollars versus seven hundred seventy-two, and balance drives default. At the same balance, students default less. For balances between fifteen hundred and two thousand, seventeen point five percent versus twenty-five point seven.
+L: And what do we tell the bank manager?
+M: Don't reject students for being students, and don't read the negative coefficient as student status causing lower risk. It's a conditional association.
+L: Assumptions?
+M: Log odds linear in X, independent observations, no strong multicollinearity, no overly influential outliers, and no complete separation. Normal errors and equal variance are not required.
+L: Now the confusion matrix.
+M: The lender model at threshold point five, on three thousand two hundred one loans. True negatives, two thousand seven hundred twenty correct approvals. False negatives, two hundred thirteen missed defaults. False positives, eighty-three false alarms. True positives, one hundred eighty-five defaults caught.
+L: Metrics.
+M: Ask the denominator question. Recall, or sensitivity: caught over all actual defaulters, one eighty-five over three ninety-eight, forty-six point five percent. Specificity: cleared over all who repay, ninety-seven percent. Precision: caught over all flagged, one eighty-five over two sixty-eight, sixty-nine percent. Negative predictive value: ninety-two point seven. Accuracy: ninety point eight.
+L: And the accuracy trap again.
+M: Predict no default for everyone and accuracy is eighty-seven point six percent with zero defaults caught. Recall or balanced accuracy exposes it.
+L: Moving the threshold.
+M: At point five, recall forty-six percent, precision sixty-nine. At point two, recall seventy-eight, precision fifty. At point one, recall eighty-nine, precision thirty-eight. Lower the threshold and you catch more defaulters but decline more good applicants. No threshold removes the trade-off.
+L: And AUC?
+M: AUC is point nine two four. It's the probability that a random defaulter is ranked above a random repayer. It's useful, but it doesn't choose your threshold, your costs, or your capacity. And when positives are rare, a false positive rate of eleven percent can sit next to a precision of only fifty percent. Report both.
+L: Next episode: from probability to policy. Costs, thresholds and calibration.
+
+## ep4 | Episode 4: From probability to policy
+L: Welcome to the final episode of Decision Audit. From probability to policy.
+M: Week four has three moves. Move one: cost asymmetry, which error hurts more. Move two: the threshold, where is the break-even point. Move three: the validity check, can we trust the probability for these people.
+L: Move one.
+M: In the lender case, approving someone who defaults costs eight thousand. Declining someone who would have repaid costs one thousand. A missed default is eight times worse. As baselines per thousand applicants: approving everyone costs about nine hundred ninety-five thousand. Declining everyone costs about eight hundred seventy-six thousand. The model has to beat both.
+L: Move two. Derive it.
+M: For one applicant with default probability p. Approving has expected cost p times the cost of a false negative. Declining has expected cost one minus p times the cost of a false positive. Set them equal and solve. Decline when p is greater than p star, which equals the false positive cost divided by the sum of both costs.
+L: For the lender?
+M: One thousand over nine thousand, about point one one one. For the fraud sandbox: fifty over three hundred, about point one six seven. You can also use the cost ratio r, the false negative cost over the false positive cost. Then p star is one over one plus r. Ratio four gives point two. Ratio eight gives point one one. Ratio sixteen gives about point zero six.
+L: The three applicants exercise.
+M: At p equals point zero four: approving costs three hundred twenty, declining costs nine hundred sixty, so approve. At point one one: eight hundred eighty versus eight hundred ninety, basically indifferent. At point three: two thousand four hundred versus seven hundred, so decline. And the twist: if applicant three's true risk were point one, it would be eight hundred versus nine hundred, so approve. A wrong probability leads to a wrong decision.
+L: What does the threshold save?
+M: Cost per thousand applicants at threshold point five is about five hundred fifty-eight thousand. At point one, about two hundred eighty-eight thousand, roughly half. And the curve is flat near its minimum, from about point zero seven to point one one. Being roughly right about the cost is enough. Being ten times wrong is not.
+L: Then the CFO isn't sure about the cost.
+M: A missed default costs somewhere between four thousand and sixteen thousand. Compare thresholds by their worst case. Point one stays within about twelve percent of the best possible cost in all three scenarios. Point two is nearly perfect if misses cost four thousand, but fifty-one percent worse if they cost sixteen thousand. Point three three can be over a hundred percent worse. So choose about point one. Underestimating the miss cost is the more expensive mistake, because the curve is steep on the side where you decline too few. Ask for a range, not a single number.
+L: And capacity.
+M: The fraud case: ten thousand transactions a day, five percent fraud, a missed fraud costs two hundred fifty dollars, a false alarm fifty, and the team can review five hundred cases a day. The break-even threshold of point one six seven would flag about seven hundred seventy a day. That's not feasible. The best feasible threshold is about point two seven, at roughly seventy-two thousand dollars a day. So the capacity limit itself costs about three thousand five hundred dollars a day.
+L: And that's a number to give management.
+M: Yes. Compare it with the cost of another reviewer. The threshold isn't the only lever: you can add capacity, automate triage, or rank and review the top five hundred.
+L: Move three. Calibration.
+M: Calibration means that among people scored about thirty percent, about thirty in a hundred actually default. AUC checks the order of the scores. Calibration checks the size. And the break-even rule needs the size.
+L: The sandbox showed something scary here.
+M: For past approved loans, the calibration points hug the diagonal. But for first-time customers next quarter, those scored around two percent actually defaulted at twenty-eight percent. Those scored eighty-four percent defaulted at fifty-three. At the threshold of point one one, the model expected a cost of three hundred forty thousand per thousand applicants. The actual cost was one million and six thousand, about three times more.
+L: But the overall average looked fine?
+M: Predicted thirty-three point six percent, actual thirty-three point one. The errors in different groups cancel. Averages hide subgroup failures. So check calibration for every group you serve. Then respond: Fix by recalibrating on recent outcomes, Learn with a small pilot of first-time customers, or Limit by using the model only for established customers. And recalibration can't fix a population the data never covered.
+L: What about resampling to fifty-fifty?
+M: Balancing or class weights inflate the predicted probabilities. Ranking can stay fine, but the size is wrong, so the break-even rule breaks. Moving the threshold keeps calibration intact. If you resampled, correct the log odds back to the true base rate, or recalibrate with Platt scaling or isotonic regression on untouched data.
+L: Two more ideas from week four.
+M: First, high risk isn't the same as persuadable. The model estimates who is likely to churn or default. The decision needs to know who changes if we act. That's uplift, the probability of the outcome with the action minus without it, and only a pilot or an A B test can measure it. Second, local validation. The Epic sepsis model at the University of Michigan alerted on eighteen percent of patients with a sensitivity of thirty-three percent and a positive predictive value of twelve percent. A vendor's threshold is a starting point. A model validated elsewhere is evidence, not permission to deploy here.
+L: And deployment creates the next data.
+M: Right. We only observe labels for people we approve, hire or review. So every policy shapes what the next model can learn from.
+L: Let's finish with exam strategy. What wins points?
+M: Every long answer should have four things: a decision, a number, a course concept, and a limit on what you claim. Use the audit statement: observation, mechanism, implication, next evidence. Pair each issue with Fix, Learn or Limit. Name an owner and a stop rule.
+L: And the traps to avoid?
+M: Choosing K on training error. Being impressed by accuracy without the baseline. Thinking more rows fix selection bias. Treating a missing default as a repayment. Using point five as a default threshold. Using AUC to choose a threshold. Trusting aggregate calibration. Ignoring capacity. Making causal claims from observational data. Extrapolating outside the data. Trusting a rising R squared. Writing monitor carefully without a metric. And picking the most cautious label without naming the evidence.
+L: One line to remember on exam day?
+M: Decision science lives in the connection between model output and action.
+L: That's it for Decision Audit. Good luck on the midterm.
+M: You've got this.
